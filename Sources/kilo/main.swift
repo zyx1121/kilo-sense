@@ -20,19 +20,13 @@ if CommandLine.arguments.contains("--locales") {
     exit(0)
 }
 
-// M1b：系統音訊 (ScreenCaptureKit) → SpeechAnalyzer(zh-TW) → console 字幕
+// M1b：系統音訊 (ScreenCaptureKit) → SpeechAnalyzer(zh-TW) → console 字幕。
+// 驗證工具，Ctrl-C(SIGINT) 直接終止即可。優雅退出屬 M2 的 app lifecycle —
+// top-level await CLI 下 DispatchSource signal 不會 fire，不在此纏鬥。
 let transcriber = Transcriber(locale: Locale(identifier: "zh-TW"))
 let source = SystemAudioSource()
 
 log("kilo — 系統音訊即時字幕 (zh-TW)。Ctrl-C 結束。")
-
-// Ctrl-C 優雅收尾（global queue，不依賴 main runloop）
-signal(SIGINT, SIG_IGN)
-let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
-sigint.setEventHandler {
-    Task { await source.stop(); try? await transcriber.finish() }
-}
-sigint.resume()
 
 do {
     try await transcriber.setUp()
@@ -41,6 +35,7 @@ do {
     for await buffer in audio {
         try await transcriber.stream(buffer)
     }
+    try? await transcriber.finish()
     log("結束。")
 } catch {
     log("error: \(error)")
