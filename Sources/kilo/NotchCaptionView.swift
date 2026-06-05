@@ -17,5 +17,7 @@ struct NotchCaptionView: View {
         .padding(.bottom, 10)
         .background(.black)
         .clipShape(.rect(bottomLeadingRadius: 16, bottomTrailingRadius: 16))
+        .opacity(model.visible ? 1 : 0)
+        .animation(.easeInOut(duration: 0.35), value: model.visible)  // 靜音收合 / 出現淡入
     }
 }

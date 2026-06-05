@@ -33,15 +33,18 @@ final class Transcriber {
         let transcriber = SpeechTranscriber(
             locale: locale,
             transcriptionOptions: [],
-            reportingOptions: [.volatileResults],
+            reportingOptions: [.volatileResults, .fastResults],  // fastResults：偏即時、不等累積到穩
             attributeOptions: [.audioTimeRange])
         self.transcriber = transcriber
-        self.analyzer = SpeechAnalyzer(modules: [transcriber])
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        self.analyzer = analyzer
 
         try await ensureModel(transcriber: transcriber, locale: locale)
 
-        self.analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
-        guard analyzerFormat != nil else { throw TranscriberError.noAudioFormat }
+        let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
+        self.analyzerFormat = format
+        guard let format else { throw TranscriberError.noAudioFormat }
+        try await analyzer.prepareToAnalyze(in: format)  // ANE 預熱，避免首段冷啟動慢
 
         let captions = self.captions
         resultsTask = Task {
@@ -59,7 +62,7 @@ final class Transcriber {
             }
         }
 
-        try await analyzer?.start(inputSequence: inputSequence)
+        try await analyzer.start(inputSequence: inputSequence)
     }
 
     func stream(_ buffer: PCMBuffer) async throws {
