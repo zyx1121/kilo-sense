@@ -1,0 +1,8 @@
+.build/
+build/
+.swiftpm/
+.DS_Store
+Package.resolved
+Makefile.local
+*.xcodeproj/
+xcuserdata/
