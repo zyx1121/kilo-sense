@@ -1,46 +1,50 @@
 import Foundation
 
-/// 字幕顯示狀態。Transcriber 餵辨識結果，SwiftUI 觀察。
-/// 顯示與辨識解耦：analyzer 一段段給，這裡用打字機逐字推進，做出連貫感。
+/// 字幕顯示狀態。顯示與辨識解耦：打字機逐字推進；每段獨立、不累積——
+/// 一段定稿後，下一段開始就把舊段噴掉重來（final 不長串堆積）。
 @MainActor @Observable
 final class CaptionModel {
-    /// 已定稿（白字）。
-    private(set) var finalized: String = ""
-    /// 逐字顯示中的 volatile（灰字）——打字機追到 targetVolatile。
-    private(set) var shownVolatile: String = ""
+    /// 當前段顯示文字（逐字推進）。
+    private(set) var shown: String = ""
+    /// 當前段是否已定稿（true = 白字，false = 灰字）。
+    private(set) var isFinal: Bool = false
     /// 是否展開顯示（靜音後收合）。
     private(set) var visible: Bool = false
 
-    private var targetVolatile: String = ""
+    private var target: String = ""
+    private var pendingClear: Bool = false  // 上段已定稿，下個 volatile 視為新段
     private var typeTask: Task<Void, Never>?
     private var hideTask: Task<Void, Never>?
 
     func setVolatile(_ text: String) {
-        targetVolatile = text
+        if pendingClear {              // 新一段 → 噴掉上段
+            shown = ""; target = ""; pendingClear = false
+        }
+        isFinal = false
+        target = text
         appear()
-        pumpTypewriter()
+        pump()
     }
 
     func commitFinal(_ text: String) {
-        finalized += text
-        if finalized.count > 200 { finalized = String(finalized.suffix(200)) }
-        targetVolatile = ""
-        shownVolatile = ""
+        isFinal = true
+        target = text
+        pendingClear = true            // 定稿後不累積，下段會清掉這段
         appear()
+        pump()
     }
 
-    /// 逐字把 shownVolatile 推進到 targetVolatile（35ms/字）。
-    private func pumpTypewriter() {
-        guard typeTask == nil else { return }  // 已在推進，loop 會讀到新 target
+    /// 逐字把 shown 推進到 target（35ms/字）。
+    private func pump() {
+        guard typeTask == nil else { return }
         typeTask = Task { [weak self] in
             while let self, !Task.isCancelled {
-                if shownVolatile == targetVolatile { break }
-                if targetVolatile.hasPrefix(shownVolatile) {
-                    let end = targetVolatile.index(targetVolatile.startIndex,
-                                                   offsetBy: shownVolatile.count + 1)
-                    shownVolatile = String(targetVolatile[..<end])
+                if shown == target { break }
+                if target.hasPrefix(shown) {
+                    let end = target.index(target.startIndex, offsetBy: shown.count + 1)
+                    shown = String(target[..<end])
                 } else {
-                    shownVolatile = targetVolatile  // 辨識回頭改字，直接對齊不卡住
+                    shown = target     // 辨識回頭改字，直接對齊不卡住
                 }
                 try? await Task.sleep(for: .milliseconds(35))
             }
@@ -48,7 +52,7 @@ final class CaptionModel {
         }
     }
 
-    /// 有內容就展開；靜音 3 秒收合並清空（回到只剩瀏海）。
+    /// 有內容就展開；靜音 3 秒收合並清空。
     private func appear() {
         visible = true
         hideTask?.cancel()
@@ -56,9 +60,7 @@ final class CaptionModel {
             try? await Task.sleep(for: .seconds(3))
             guard let self, !Task.isCancelled else { return }
             visible = false
-            finalized = ""
-            shownVolatile = ""
-            targetVolatile = ""
+            shown = ""; target = ""; isFinal = false; pendingClear = false
         }
     }
 }
