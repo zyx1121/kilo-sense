@@ -3,7 +3,7 @@ import Foundation
 import Speech
 import SwiftUI
 
-// M1a：--locales 探測語言支援（保留，免權限）
+// --locales 探測語言支援（免權限）
 func dumpLocales() async {
     let supported = Array(await SpeechTranscriber.supportedLocales)
     let installed = Array(await SpeechTranscriber.installedLocales)
@@ -22,13 +22,18 @@ if CommandLine.arguments.contains("--locales") {
     exit(0)
 }
 
-// M2：系統音訊 → SpeechAnalyzer(zh-TW) → 瀏海 overlay 字幕（volatile 灰 / final 白）
+// 系統音訊（預設）或麥克風（--mic）→ SpeechAnalyzer(zh-TW) → 瀏海 overlay 字幕
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let captions = CaptionModel()
-    private let source = SystemAudioSource()
+    private let source: AudioSource
     private var transcriber: Transcriber?
     private var panel: NotchPanel?
+
+    init(source: AudioSource) {
+        self.source = source
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_: Notification) {
         showOverlay()
@@ -69,8 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// 音訊源：--mic 走麥克風，預設系統音訊
+let useMic = CommandLine.arguments.contains("--mic")
+logErr(useMic ? "音訊源：麥克風" : "音訊源：系統音訊")
 let app = NSApplication.shared
-let delegate = AppDelegate()
+let delegate = AppDelegate(source: useMic ? MicrophoneSource() : SystemAudioSource())
 app.delegate = delegate
 app.setActivationPolicy(.accessory)  // 無 Dock 圖示的背景 app
 app.run()
