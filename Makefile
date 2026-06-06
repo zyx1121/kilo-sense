@@ -8,15 +8,15 @@ CONTENTS   := $(APP_BUNDLE)/Contents
 SIGN_ID ?= -
 -include Makefile.local
 
-.PHONY: all build locales bundle run clean rebuild
+.PHONY: all build locales bundle run clean rebuild logs
 all: bundle
 
 build:
 	swift build -c release
 
-# M1a：純 CLI 跑，dump SpeechTranscriber.supportedLocales 驗繁中（不需打包/權限）
+# 純 CLI 跑，dump SpeechTranscriber.supportedLocales（不需打包/權限）
 locales: build
-	@$(BIN_PATH)
+	@$(BIN_PATH) --locales
 
 bundle: build
 	@rm -rf $(APP_BUNDLE)
@@ -30,6 +30,10 @@ run: bundle
 	open $(APP_BUNDLE)
 
 rebuild: clean bundle
+
+# 即時 Telemetry（asr / polish / agent / shake）
+logs:
+	log stream --info --predicate 'subsystem == "tw.zyx.kilo"' --style compact
 
 clean:
 	rm -rf .build build
