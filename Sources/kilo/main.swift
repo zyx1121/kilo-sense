@@ -18,6 +18,9 @@ func dumpLocales() async {
 
 func logErr(_ s: String) { FileHandle.standardError.write(Data((s + "\n").utf8)) }
 
+/// codex agent 的 workspace；reply 裡的相對路徑連結也解析到這底下。
+let kiloWorkdir = NSHomeDirectory() + "/.kilo"
+
 if CommandLine.arguments.contains("--locales") {
     await dumpLocales()
     exit(0)
@@ -60,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showSummaryWindow() {
         let agent = Keychain.openAIKey().map {
-            CodexAgent(workdir: NSHomeDirectory() + "/.kilo", apiKey: $0)
+            CodexAgent(workdir: kiloWorkdir, apiKey: $0)
         }
         let polisher = TranscriptPolisher(store: transcript)
         logErr("逐字稿整理模型：\(polisher.backendName)")

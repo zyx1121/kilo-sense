@@ -104,6 +104,29 @@ struct TranscriptView: View {
         .glassEffect(in: .rect(cornerRadius: 16))
         .animation(.spring(response: 0.4, dampingFraction: 0.82), value: store.transcriptEmpty)
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: store.feed.count)
+        .environment(\.openURL, OpenURLAction(handler: openFeedLink))
+    }
+
+    /// reply 裡的連結：http(s) 交給系統；相對路徑 / file 解析到 ~/.kilo 下用預設 app 開。
+    /// 沒這層的話 scheme-less URL 會直接丟給 LaunchServices → -50 開不起來。
+    private func openFeedLink(_ url: URL) -> OpenURLAction.Result {
+        if let scheme = url.scheme, scheme == "http" || scheme == "https" {
+            return .systemAction
+        }
+        let raw = url.scheme == "file"
+            ? url.path
+            : (url.absoluteString.removingPercentEncoding ?? url.absoluteString)
+        let expanded = NSString(string: raw).expandingTildeInPath
+        // 相對路徑依序試 workdir 與 workdir/notes（agent 的筆記慣例放 notes/）
+        let candidates = expanded.hasPrefix("/")
+            ? [expanded]
+            : [kiloWorkdir + "/" + expanded, kiloWorkdir + "/notes/" + expanded]
+        if let hit = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: hit))
+            return .handled
+        }
+        Telemetry.summary.error("feed link not found: \(raw, privacy: .public)")
+        return .discarded  // 找不到就吞掉，不彈 -50 dialog
     }
 
     /// 三層透明度：已整理 → 定稿待整理 → 辨識中。
