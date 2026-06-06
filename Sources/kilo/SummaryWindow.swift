@@ -6,14 +6,14 @@ final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
-/// 可拖動的 Kilo overlay：分段逐字稿 + 指令輸入 + Kilo 回應。floating、拖背景移動、高度動態。
+/// 可拖動的 Kilo overlay：連續逐字稿 + 指令輸入 + agent 步驟 feed。floating、拖背景移動、高度動態。
 @MainActor
 final class SummaryWindow {
     private let panel: KeyablePanel
 
-    init(store: TranscriptStore, metrics: MetricsStore, controller: AgentController) {
+    init(store: TranscriptStore, controller: AgentController) {
         let hosting = NSHostingController(
-            rootView: TranscriptView(store: store, metrics: metrics, controller: controller))
+            rootView: TranscriptView(store: store, controller: controller))
         hosting.sizingOptions = [.preferredContentSize]
 
         panel = KeyablePanel(
@@ -34,11 +34,8 @@ final class SummaryWindow {
 
 struct TranscriptView: View {
     let store: TranscriptStore
-    let metrics: MetricsStore
     let controller: AgentController
     @State private var input = ""
-
-    private var recent: [String] { Array(store.segments.suffix(8)) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -46,40 +43,39 @@ struct TranscriptView: View {
                 .font(.headline).foregroundStyle(.white.opacity(0.85))
                 .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 8)
 
-            // 分段逐字稿
-            if recent.isEmpty {
+            // 連續逐字稿：白(已整理) → 半白(定稿待整理) → 灰(辨識中，打字機)
+            if store.transcriptEmpty {
                 Text("聽取中…")
                     .font(.system(size: 12)).foregroundStyle(.white.opacity(0.45))
                     .padding(.horizontal, 16).padding(.bottom, 8)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(Array(recent.enumerated()), id: \.offset) { i, seg in
-                                Text(seg)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.white.opacity(0.9))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 10).padding(.vertical, 6)
-                                    .background(.white.opacity(0.05), in: .rect(cornerRadius: 8))
-                                    .id(i)
-                            }
-                        }
-                        .padding(.horizontal, 14)
+                        Text(transcriptText)
+                            .font(.system(size: 12))
+                            .lineSpacing(3.5)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                        Color.clear.frame(height: 1).id("bottom")
                     }
-                    .frame(height: 220)
-                    .onChange(of: recent.count) { _, c in
-                        withAnimation { proxy.scrollTo(c - 1, anchor: .bottom) }
+                    .frame(height: 230)
+                    .onChange(of: store.transcriptLength) { _, _ in
+                        proxy.scrollTo("bottom", anchor: .bottom)
                     }
                 }
+                .padding(.bottom, 6)
             }
 
-            // Kilo 回應
-            if let reply = store.reply {
-                Text(reply)
-                    .font(.system(size: 12)).foregroundStyle(.cyan.opacity(0.9))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14).padding(.vertical, 8)
+            // Kilo feed：指令 + tool 步驟 + 淺藍打字機回應
+            if !store.feed.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(store.feed.suffix(8)) { step in
+                        stepRow(step)
+                    }
+                }
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.white.opacity(0.04))
             }
 
             // 指令輸入 → codex agent
@@ -93,38 +89,54 @@ struct TranscriptView: View {
             }
             .padding(.horizontal, 14).padding(.vertical, 9)
             .background(.white.opacity(0.06))
-
-            Divider().overlay(.white.opacity(0.1))
-            MetricFooter(metrics: metrics)
         }
         .frame(width: 360)
         .fixedSize(horizontal: false, vertical: true)
         .glassEffect(in: .rect(cornerRadius: 16))
-        .animation(.spring(response: 0.4, dampingFraction: 0.82), value: recent.isEmpty)
+        .animation(.spring(response: 0.4, dampingFraction: 0.82), value: store.transcriptEmpty)
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: store.feed.count)
     }
-}
 
-private struct MetricFooter: View {
-    let metrics: MetricsStore
-
-    var body: some View {
-        HStack(spacing: 14) {
-            stat("段", "\(metrics.segments)")
-            stat("字", "\(metrics.asrChars)")
-            stat("codex", "\(metrics.codexCalls)")
-            stat("延遲", String(format: "%.1fs", metrics.lastCodexLatency))
-            if metrics.codexErrors > 0 {
-                stat("err", "\(metrics.codexErrors)", color: .red.opacity(0.85))
-            }
-            Spacer()
+    /// 三層透明度：已整理 → 定稿待整理 → 辨識中。
+    private var transcriptText: AttributedString {
+        func styled(_ s: String, _ opacity: Double) -> AttributedString {
+            var a = AttributedString(s)
+            a.foregroundColor = .white.opacity(opacity)
+            return a
         }
-        .padding(.horizontal, 16).padding(.vertical, 8)
+        return styled(store.polished, 0.92)
+            + styled(store.pendingRaw, 0.55)
+            + styled(store.volatileShown, 0.38)
     }
 
-    private func stat(_ label: String, _ value: String, color: Color = .white.opacity(0.8)) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(value).font(.system(size: 11, design: .monospaced)).foregroundStyle(color)
-            Text(label).font(.system(size: 8)).foregroundStyle(.white.opacity(0.4))
+    @ViewBuilder
+    private func stepRow(_ step: AgentStep) -> some View {
+        switch step.kind {
+        case .user:
+            Text("❯ \(step.text)")
+                .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                .lineLimit(2)
+        case .tool:
+            HStack(spacing: 6) {
+                if step.running {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: step.failed ? "xmark.circle" : "checkmark.circle")
+                        .font(.system(size: 9))
+                        .foregroundStyle(step.failed ? .red.opacity(0.8) : .white.opacity(0.35))
+                }
+                Text(step.text)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1)
+            }
+        case .reply:
+            Text(step.shown)
+                .font(.system(size: 12)).foregroundStyle(.cyan.opacity(0.9))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .error:
+            Text("⚠️ \(step.text)")
+                .font(.system(size: 11)).foregroundStyle(.orange.opacity(0.9))
         }
     }
 }

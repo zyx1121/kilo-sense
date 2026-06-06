@@ -62,9 +62,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let agent = Keychain.openAIKey().map {
             CodexAgent(workdir: NSHomeDirectory() + "/.kilo", apiKey: $0)
         }
-        let controller = AgentController(store: transcript, agent: agent, metrics: metrics)
+        let polisher = TranscriptPolisher(store: transcript)
+        logErr("逐字稿整理模型：\(polisher.backendName)")
+        let controller = AgentController(store: transcript, agent: agent, metrics: metrics, polisher: polisher)
         self.agentController = controller
-        let win = SummaryWindow(store: transcript, metrics: metrics, controller: controller)
+        let win = SummaryWindow(store: transcript, controller: controller)
         win.show()
         summaryWindow = win
     }
@@ -82,8 +84,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let transcriber = Transcriber(
             locale: Locale(identifier: lang), captions: captions,
+            onVolatile: { text in
+                controller?.appendVolatile(text)  // → overlay 灰字尾巴（打字機）
+            },
             onFinal: { text in
-                controller?.appendFinal(text)   // → 逐字稿分段 + metrics + codex context
+                controller?.appendFinal(text)   // → 逐字稿 + polisher + metrics + codex context
                 Telemetry.asr.info("final chars=\(text.count, privacy: .public)")
             })
         self.transcriber = transcriber
