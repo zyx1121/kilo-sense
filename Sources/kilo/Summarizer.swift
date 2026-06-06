@@ -1,16 +1,19 @@
 import Foundation
+import OSLog
 
 /// 累積定稿逐字稿，切段後丟給 gpt-5.4-mini 摘要。
 /// 切段：停頓 6 秒（沒有新定稿）或累積 ≥500 字，誰先到誰觸發。
 @MainActor
 final class Summarizer {
     private let store: SummaryStore
+    private let metrics: MetricsStore
     private let client: OpenAIClient?
     private var buffer = ""
     private var flushTask: Task<Void, Never>?
 
-    init(store: SummaryStore, client: OpenAIClient?) {
+    init(store: SummaryStore, metrics: MetricsStore, client: OpenAIClient?) {
         self.store = store
+        self.metrics = metrics
         self.client = client
     }
 
@@ -33,14 +36,22 @@ final class Summarizer {
         flushTask?.cancel()
         let segment = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
         buffer = ""
-        guard segment.count >= 10, let client else { return }  // 太短 / 沒 key 就不送
-        Task { [weak self] in
+        guard segment.count >= 10, let client else { return }
+        let metrics = self.metrics
+        let store = self.store
+        Task {
+            let start = Date()
+            Telemetry.summary.info("summarize request chars=\(segment.count, privacy: .public)")
             do {
-                let summary = try await client.summarize(segment)
-                self?.store.add(summary)
+                let result = try await client.summarize(segment)
+                let latency = Date().timeIntervalSince(start)
+                store.add(result.text)
+                metrics.recordSummary(tokensIn: result.tokensIn, tokensOut: result.tokensOut, latency: latency)
+                Telemetry.summary.info(
+                    "summarize done in=\(result.tokensIn, privacy: .public) out=\(result.tokensOut, privacy: .public) latency=\(String(format: "%.2f", latency), privacy: .public)s")
             } catch {
-                FileHandle.standardError.write(
-                    Data("summarize error: \(error.localizedDescription)\n".utf8))
+                metrics.recordError()
+                Telemetry.summary.error("summarize failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
