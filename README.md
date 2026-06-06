@@ -1,32 +1,72 @@
+```text
+██╗  ██╗██╗██╗      ██████╗
+██║ ██╔╝██║██║     ██╔═══██╗
+█████╔╝ ██║██║     ██║   ██║
+██╔═██╗ ██║██║     ██║   ██║
+██║  ██╗██║███████╗╚██████╔╝
+╚═╝  ╚═╝╚═╝╚══════╝ ╚═════╝
+```
+
 # kilo
 
-> macOS 感官 agent — 聽見你看的影片與對話、看見螢幕，做即時分析。
+> macOS 感官 agent — 聽見你在聽的、看見你指的，即時轉錄、整理、分析、記錄。
 
-**狀態**：scaffold / M1。當前 infra MVP = 在 MacBook 瀏海（動態島）顯示串流即時字幕。
+`SpeechAnalyzer` · `ScreenCaptureKit` · `codex` · `FoundationModels` · `shake-to-capture`
+
+## 它做什麼
+
+開著 kilo 看影片、開會、上課：
+
+- **瀏海字幕** — 系統音訊即時轉錄，volatile 灰字逐字打出、定稿轉白，瀏海下方一行流過
+- **連續逐字稿** — 可拖動的 overlay 視窗累積全文；小模型背景把生稿補標點、修辨識錯字、分段 — 灰字尾巴一直流入，幾秒後被整理過的白字取代
+- **問 Kilo** — 輸入框直通 codex agent（帶最近逐字稿 + session 記憶），tool use 步驟即時浮出、回應打字機串流；說「記錄下來」它就寫筆記進 `~/.kilo/`，回覆裡的路徑點了直接開
+- **Shake 圈選** — 晃游標進選取模式：螢幕變暗、游標下的 UI 元素亮起，左鍵點擊收集（文字收文字、其他截圖），右鍵結束；素材變輸入框上方的 chips，下一輪丟給 codex 看圖分析
 
 ## Pipeline
 
 ```
-系統音訊 (ScreenCaptureKit) → SpeechAnalyzer / SpeechTranscriber → 瀏海 overlay 字幕
+系統音訊 (ScreenCaptureKit) ─→ SpeechAnalyzer ─→ 瀏海字幕 (volatile/final)
+                                      │
+                                      └→ 連續逐字稿 ─→ 小模型整理 (FoundationModels / gpt-5.4-nano)
+                                                            │
+晃游標 ─→ dim + AX spotlight ─→ 點擊圈選 ──── chips ──────→ codex exec（resume session）─→ feed
 ```
 
-## Milestones
-
-- **M1a**（現在）— 探測 `SpeechTranscriber` 語言支援、驗繁中：`make locales`
-- **M1b** — ScreenCaptureKit 系統音訊 → SpeechAnalyzer → console 印 volatile/final
-- **M2** — 接 `NSPanel` 瀏海 overlay：單行滾動，volatile(灰) / final(白)
-- **M3** — 加麥克風音訊源（`AudioSource` protocol 的第二個實作）
-
-## Dev（不開 Xcode）
+## 跑起來（不開 Xcode）
 
 ```bash
-make locales   # 跑 M1a，dump 支援語言
-make bundle    # 打包 .app + codesign
-make run       # bundle + open
+make run       # build + bundle + codesign + open
+make locales   # dump SpeechTranscriber 支援語言
+make logs      # 即時看 Telemetry（asr / polish / agent / shake）
 ```
 
-需 macOS 26+（SpeechAnalyzer）與一張 Apple Development cert（hash 放本地 `Makefile.local` 的 `SIGN_ID`）。
+需求：
+
+- **macOS 26+**（SpeechAnalyzer、FoundationModels）
+- **Apple Development cert** — hash 放 `Makefile.local` 的 `SIGN_ID`（gitignored），沒有就 ad-hoc 簽
+- **codex CLI** 在 PATH（agent 引擎；`zsh -lc` 載入，fnm shim 也通）
+- **OpenAI key** 在 Keychain（`service=kilo account=openai`）— agent 與逐字稿整理的 fallback 用；沒有 key 字幕與逐字稿照常，agent 停用
+- 權限：**螢幕錄製**（系統音訊 + 圈選截圖）、**輔助使用**（shake 的元素探測與點擊攔截），首次啟動會提示
+
+逐字稿整理模型自動選：Apple Intelligence 有開 → on-device FoundationModels（免費本地）；沒開 → `gpt-5.4-nano` 直打 API；都沒有 → 原文直出。
+
+```bash
+./build/kilo.app/Contents/MacOS/kilo --lang en-US   # 換辨識語言（預設 zh-TW）
+```
+
+## 結構
+
+```
+Sources/kilo/
+├── App/         main.swift — 接線與啟動
+├── Audio/       ScreenCaptureKit 系統音訊 → PCM
+├── Transcript/  SpeechAnalyzer 轉錄 + store + 小模型整理
+├── Agent/       codex exec --json 串流 + session resume
+├── Overlay/     瀏海字幕 + 主視窗（逐字稿 / feed / chips）
+├── Core/        Telemetry / Keychain / Metrics
+└── Shake/       晃游標圈選（ported from zyx1121/shake）
+```
 
 ## 設計依據
 
-`docs/` — SpeechAnalyzer survey、瀏海 overlay 自刻筆記、CLI 開發流程。
+`docs/` — [SpeechAnalyzer survey](docs/speechanalyzer-survey.md)、[瀏海 overlay 自刻筆記](docs/macos-notch-overlay.md)、[CLI 開發流程](docs/macos-cli-dev.md)。
