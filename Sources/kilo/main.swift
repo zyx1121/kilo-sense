@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OSLog
 import Speech
 import SwiftUI
 
@@ -22,11 +23,12 @@ if CommandLine.arguments.contains("--locales") {
     exit(0)
 }
 
-// 系統音訊 → SpeechAnalyzer(zh-TW) → 瀏海字幕 + gpt-5.4-mini 摘要（可拖動 window）
+// 系統音訊 → SpeechAnalyzer(zh-TW) → 瀏海字幕 + gpt-5.4-mini 摘要 + 可觀測指標
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let captions = CaptionModel()
     private let store = SummaryStore()
+    private let metrics = MetricsStore()
     private let source = SystemAudioSource()
     private var transcriber: Transcriber?
     private var panel: NotchPanel?
@@ -57,7 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showSummaryWindow() {
-        let win = SummaryWindow(store: store)
+        let win = SummaryWindow(store: store, metrics: metrics)
         win.show()
         summaryWindow = win
     }
@@ -67,11 +69,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if client == nil {
             logErr("⚠️ 沒有 OpenAI key（設 OPENAI_API_KEY 或 Keychain service=kilo account=openai）— summary 停用，字幕照常")
         }
-        let summarizer = Summarizer(store: store, client: client)
+        let summarizer = Summarizer(store: store, metrics: metrics, client: client)
         self.summarizer = summarizer
+        let metrics = self.metrics
 
-        let transcriber = Transcriber(locale: Locale(identifier: "zh-TW"), captions: captions,
-                                      onFinal: { summarizer.feed($0) })
+        let transcriber = Transcriber(
+            locale: Locale(identifier: "zh-TW"), captions: captions,
+            onFinal: { text in
+                summarizer.feed(text)
+                metrics.recordFinal(chars: text.count)
+                Telemetry.asr.info("final chars=\(text.count, privacy: .public)")
+            })
         self.transcriber = transcriber
         Task {
             do {
