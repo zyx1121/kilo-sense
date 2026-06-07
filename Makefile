@@ -13,7 +13,7 @@ DEV_ID_APP ?=
 NOTARY_PROFILE ?= kilo-notary
 -include Makefile.local
 
-.PHONY: all build locales bundle run clean rebuild logs install dmg release
+.PHONY: all build locales bundle run clean rebuild logs install dmg release publish
 
 all: bundle
 
@@ -74,6 +74,11 @@ release: build
 	@xcrun notarytool submit $(DMG) --keychain-profile "$(NOTARY_PROFILE)" --wait   # DMG 自己也要 notarize 才能 staple
 	@xcrun stapler staple $(DMG)
 	@echo "[OK] notarized + stapled（app + dmg）：$(DMG)"
+
+# 本地發版：公證好的 DMG 傳上 GitHub Release（簽名私鑰不出本機，不走 CI）
+# tag = v<版本>（取自 Info.plist）；版本已存在就先 bump CFBundleShortVersionString
+publish: release
+	gh release create v$(VERSION) $(DMG) --title "v$(VERSION)" --generate-notes
 
 # 即時 Telemetry（asr / polish / agent / shake）
 logs:
