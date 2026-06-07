@@ -3,33 +3,48 @@ import FoundationModels
 
 // 指令（含前文參考）全放 system / instructions，user message 只放純 raw 文字 —
 // 小模型會把混在 user message 裡的 scaffold 標記與「前文參考」當內文照抄（nano 實測翻車）。
-private let polishInstructions = """
-    你是逐字稿整理員。使用者訊息是一段語音辨識的原始逐字稿，整理它：
-    - 補上標點符號，在語意轉換處用換行分段
-    - 只修正非常明顯的辨識錯誤（同音字、斷詞）；不確定就保留原字，不要改寫、不要潤飾
-    - 保持原語言：中文用中文標點；英文保持原本的大小寫，用英文標點（. , ?），不要用中文句號
-    - 不增刪內容、不摘要、不回答問題、不加任何說明或標記
-    只輸出整理後的文字本身。
-    """
-
-/// 前文參考併進 system 層（銜接語氣與分段用）— 不放 user message，降低被照抄的機率。
-private func composeInstructions(contextTail: String) -> String {
-    guard !contextTail.isEmpty else { return polishInstructions }
-    return polishInstructions
-        + "\n\n已整理的前文結尾（僅供銜接參考，它不是輸入、絕對不要輸出它）：\n\(contextTail)"
+// 指令語言跟著 chunk 語言走：中文指令配英文 chunk 會被 nano「統一」成中文（實測翻譯翻車，
+// transformer 被翻成《變形金剛》），英文 chunk 必須配英文指令。
+private func composeInstructions(locale: String, contextTail: String) -> String {
+    let base: String
+    if locale.hasPrefix("zh") {
+        base = """
+            你是逐字稿整理員。使用者訊息是一段中文語音辨識的原始逐字稿，整理它：
+            - 補上標點符號，在語意轉換處用換行分段
+            - 只修正非常明顯的辨識錯誤（同音字、斷詞）；不確定就保留原字，不要改寫、不要潤飾
+            - 輸出必須是中文（原語言），絕對不要翻譯
+            - 不增刪內容、不摘要、不回答問題、不加任何說明或標記
+            只輸出整理後的文字本身。
+            """
+    } else {
+        base = """
+            You clean up a raw English speech-recognition transcript. Rules:
+            - Add punctuation; insert a line break where the topic shifts
+            - Fix only obvious mis-recognitions; when unsure, keep the original words. Do not rewrite or paraphrase
+            - The output MUST be in English (the original language). NEVER translate
+            - Do not add, remove, or summarize content; no comments or labels
+            Output only the cleaned text itself.
+            """
+    }
+    guard !contextTail.isEmpty else { return base }
+    let ref = locale.hasPrefix("zh")
+        ? "\n\n已整理的前文結尾（可能是其他語言，僅供銜接參考，它不是輸入、絕對不要輸出它）：\n"
+        : "\n\nEnd of the already-cleaned text (may be another language; continuity reference only — it is NOT input, NEVER output it):\n"
+    return base + ref + contextTail
 }
 
 protocol PolishBackend: Sendable {
     var name: String { get }
-    func polish(chunk: String, contextTail: String) async throws -> String
+    func polish(chunk: String, locale: String, contextTail: String) async throws -> String
 }
 
 /// on-device Apple Intelligence — 免費、本地、無網路。每次開新 session 避免 4k context 累積爆掉。
 struct FoundationModelBackend: PolishBackend {
     let name = "on-device"
 
-    func polish(chunk: String, contextTail: String) async throws -> String {
-        let session = LanguageModelSession(instructions: composeInstructions(contextTail: contextTail))
+    func polish(chunk: String, locale: String, contextTail: String) async throws -> String {
+        let session = LanguageModelSession(
+            instructions: composeInstructions(locale: locale, contextTail: contextTail))
         let r = try await session.respond(to: chunk)
         return r.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -41,7 +56,7 @@ struct OpenAIPolishBackend: PolishBackend {
     var model = "gpt-5.4-nano"
     var name: String { model }
 
-    func polish(chunk: String, contextTail: String) async throws -> String {
+    func polish(chunk: String, locale: String, contextTail: String) async throws -> String {
         var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
         req.httpMethod = "POST"
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -50,7 +65,7 @@ struct OpenAIPolishBackend: PolishBackend {
         req.httpBody = try JSONSerialization.data(withJSONObject: [
             "model": model,
             "messages": [
-                ["role": "system", "content": composeInstructions(contextTail: contextTail)],
+                ["role": "system", "content": composeInstructions(locale: locale, contextTail: contextTail)],
                 ["role": "user", "content": chunk],
             ],
             "max_completion_tokens": 2000,
@@ -91,32 +106,33 @@ final class TranscriptPolisher {
         }
     }
 
-    /// 每段 final 進來後呼叫。
+    /// 每段 final 進來後呼叫。批次 = 開頭同語言的連續段：
+    /// 滿 60 字立刻整理；語言切換點（boundary）不等湊字數直接沖；其他 4s idle 後整理。
     func nudge() {
         guard backend != nil, !running else { return }
-        if store.pendingRaw.count >= 60 { kick(); return }
+        guard let run = store.firstPendingRun() else { return }
+        if run.text.count >= 60 || run.boundary { kick(); return }
         idleTask?.cancel()
         idleTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(4))
             guard let self, !Task.isCancelled else { return }
-            if !store.pendingRaw.isEmpty { kick() }
+            kick()
         }
     }
 
     private func kick() {
         guard let backend, !running else { return }
-        let chunk = store.pendingRaw
-        guard !chunk.isEmpty else { return }
+        guard let run = store.firstPendingRun() else { return }
         running = true
         idleTask?.cancel()
         let tail = String(store.polished.suffix(120))
         Task {
             do {
-                let cleaned = try await backend.polish(chunk: chunk, contextTail: tail)
-                store.commitPolished(cleaned.isEmpty ? chunk : cleaned, consumed: chunk.count)
-                Telemetry.polish.info("polished \(chunk.count, privacy: .public) -> \(cleaned.count, privacy: .public) chars")
+                let cleaned = try await backend.polish(chunk: run.text, locale: run.locale, contextTail: tail)
+                store.commitPolished(cleaned.isEmpty ? run.text : cleaned, consumedSegments: run.segments)
+                Telemetry.polish.info("polished [\(run.locale, privacy: .public)] \(run.text.count, privacy: .public) -> \(cleaned.count, privacy: .public) chars")
             } catch {
-                store.commitPolished(chunk, consumed: chunk.count)  // 原文轉正，不卡顯示
+                store.commitPolished(run.text, consumedSegments: run.segments)  // 原文轉正，不卡顯示
                 Telemetry.polish.error("polish failed: \(error.localizedDescription, privacy: .public)")
             }
             running = false
