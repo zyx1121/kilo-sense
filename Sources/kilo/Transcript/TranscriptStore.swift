@@ -239,7 +239,7 @@ final class TranscriptStore {
         stepSeq += 1
         feed.append(AgentStep(id: "user-\(stepSeq)", kind: .user, text: instruction, revealed: true))
         trimFeed()
-        touchOverlay()  // agent 活動 = 在動 overlay（語音指令觸發時要自己展開）
+        touchOverlay()  // 打字送指令 = 在動 overlay，展開並重置閒置計時
     }
 
     /// tool 步驟進度：同 id 更新（in_progress → completed），新 id 追加。
