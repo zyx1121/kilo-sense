@@ -70,11 +70,12 @@ private func linkifyPaths(_ a: inout AttributedString) {
     }
 }
 
-/// 接合兩段文字：兩側都是 ASCII 字母/數字才補空格（英文），CJK 直接相連。
+/// 接合兩段文字：ASCII 字詞間、英文句點後接字詞要補空格（"2017." + "It" → "2017. It"），CJK 直接相連。
 private func glue(_ a: String, _ b: String) -> String {
     guard let last = a.last, let first = b.first else { return a + b }
     let wordy: (Character) -> Bool = { $0.isASCII && ($0.isLetter || $0.isNumber) }
-    return wordy(last) && wordy(first) ? a + " " + b : a + b
+    if (wordy(last) || ".!?,".contains(last)) && wordy(first) { return a + " " + b }
+    return a + b
 }
 
 /// 待整理的一段定稿 — 帶語言標籤（polisher 按語言分批整理，指令語言跟著走才不會被翻譯）。
@@ -143,12 +144,39 @@ final class TranscriptStore {
     }
 
     /// polisher 整理完一批：移掉消耗的段、整理後文字接上 polished。
+    /// 一句一行由這裡的確定性後處理保證（模型實測不穩定遵守）；
+    /// 前一批以句末標點收尾 → 換行接（語言切換的批次邊界自然斷行），否則視為斷句續接。
     func commitPolished(_ cleaned: String, consumedSegments: Int) {
         pending.removeFirst(min(consumedSegments, pending.count))
-        let c = trimOverlap(cleaned.trimmingCharacters(in: .whitespacesAndNewlines))
+        let c = breakLines(trimOverlap(cleaned.trimmingCharacters(in: .whitespacesAndNewlines)))
         guard !c.isEmpty else { return }
-        polished = polished.isEmpty ? c : glue(polished, c)
+        let sentenceEnd = polished.last.map { "。！？.!?…".contains($0) } ?? false
+        polished = polished.isEmpty ? c : (sentenceEnd ? polished + "\n" + c : glue(polished, c))
         if polished.count > 12000 { polished = String(polished.suffix(9000)) }
+    }
+
+    /// 句末標點後斷行：中文「。！？」直接斷；英文「. ! ?」後接空格才斷（"U.S. Army" 會誤斷，接受）。
+    /// 模型自己給的換行保留，不重複加。
+    private func breakLines(_ s: String) -> String {
+        let chars = Array(s)
+        var out = String()
+        out.reserveCapacity(chars.count + 16)
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            out.append(c)
+            let cjkEnd = "。！？".contains(c)
+            let asciiEnd = ".!?".contains(c) && i + 1 < chars.count && chars[i + 1] == " "
+            if cjkEnd || asciiEnd {
+                var j = i + 1
+                while j < chars.count, chars[j] == " " { j += 1 }   // 句後空白換成斷行
+                if j < chars.count, chars[j] != "\n" { out.append("\n") }
+                i = j
+                continue
+            }
+            i += 1
+        }
+        return out
     }
 
     /// 小模型偶爾把「前文參考」照抄進輸出 — 拿 polished 結尾跟新輸出開頭做

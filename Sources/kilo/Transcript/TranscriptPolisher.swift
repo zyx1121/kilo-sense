@@ -7,20 +7,23 @@ import FoundationModels
 // transformer 被翻成《變形金剛》），英文 chunk 必須配英文指令。
 private func composeInstructions(locale: String, contextTail: String) -> String {
     let base: String
+    // 「一句一行」不在指令裡 — nano/mini 實測都不穩定遵守，斷行由 commitPolished 的確定性後處理做
     if locale.hasPrefix("zh") {
         base = """
             你是逐字稿整理員。使用者訊息是一段中文語音辨識的原始逐字稿，整理它：
-            - 補上標點符號，在語意轉換處用換行分段
-            - 只修正非常明顯的辨識錯誤（同音字、斷詞）；不確定就保留原字，不要改寫、不要潤飾
+            - 補上標點符號
+            - 修正辨識錯字：同音字、形近字、語境不通的字（例如「迴到中文」應作「回到中文」），\
+            依上下文還原最合理的說法；真的無法判斷才保留原字。不要改寫句構、不要潤飾
             - 輸出必須是中文（原語言），絕對不要翻譯
-            - 不增刪內容、不摘要、不回答問題、不加任何說明或標記
+            - 不增刪語意、不摘要、不回答問題、不加任何說明或標記
             只輸出整理後的文字本身。
             """
     } else {
         base = """
             You clean up a raw English speech-recognition transcript. Rules:
-            - Add punctuation; insert a line break where the topic shifts
-            - Fix only obvious mis-recognitions; when unsure, keep the original words. Do not rewrite or paraphrase
+            - Add punctuation
+            - Fix mis-recognitions (homophones, garbled words) using context; \
+            keep the original wording only when genuinely undecidable. Do not paraphrase
             - The output MUST be in English (the original language). NEVER translate
             - Do not add, remove, or summarize content; no comments or labels
             Output only the cleaned text itself.
@@ -50,10 +53,11 @@ struct FoundationModelBackend: PolishBackend {
     }
 }
 
-/// OpenAI fallback — Apple Intelligence 沒開時用 nano 級 model 直打 API（不走 codex exec，省 22k token 的 agent prompt）。
+/// OpenAI fallback — Apple Intelligence 沒開時直打 API（不走 codex exec，省 22k token 的 agent prompt）。
+/// mini 不用 nano：錯字修正實測差距明顯（nano 只修指令例子教過的，mini 能依語境修同類錯）。
 struct OpenAIPolishBackend: PolishBackend {
     let apiKey: String
-    var model = "gpt-5.4-nano"
+    var model = "gpt-5.4-mini"
     var name: String { model }
 
     func polish(chunk: String, locale: String, contextTail: String) async throws -> String {
