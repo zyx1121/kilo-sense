@@ -9,91 +9,93 @@
 
 # kilo
 
-> macOS 感官 agent — 聽見你在聽的、看見你指的，即時轉錄、整理、分析、記錄。
+> macOS sensory agent — hears what you're hearing, sees what you point at; transcribes, cleans up, analyzes, and remembers, in real time.
 
 `SpeechAnalyzer` · `ScreenCaptureKit` · `codex` · `gpt-5.4-mini` · `shake-to-capture`
 
-## 它做什麼
+**English** · [繁體中文](README.zh-TW.md)
 
-開著 kilo 看影片、開會、上課：
+## What it does
 
-- **瀏海字幕** — 系統音訊即時轉錄，volatile 灰字逐字打出、定稿轉白，瀏海下方一行流過
-- **中英自動切換** — 兩路 SpeechTranscriber 同時轉錄，比較各路定稿信心（EMA + 遲滯），講到哪個語言就自動走哪路
-- **連續逐字稿** — 可拖動的 overlay 視窗累積全文；小模型背景把生稿補標點、修辨識錯字、分段 — 灰字尾巴一直流入，幾秒後被整理過的白字取代
-- **問 Kilo** — 輸入框直通 codex agent（帶最近逐字稿 + session 記憶），tool use 步驟即時浮出、回應打字機串流；說「記錄下來」它就寫筆記進 `~/.kilo/`，回覆裡的路徑點了直接開
-- **Shake 圈選** — 晃游標進選取模式：螢幕變暗、游標下的 UI 元素亮起，左鍵點擊收集（文字收文字、其他截圖），右鍵結束；素材變輸入框上方的 chips，下一輪丟給 codex 看圖分析
+Leave kilo running while you watch a video, sit in a meeting, take a class:
+
+- **Notch captions** — system audio transcribed live; volatile text types out in grey, finalizes to white, scrolling one line beneath the notch
+- **Auto CN/EN switching** — two `SpeechTranscriber` paths run at once; it compares each path's per-final confidence (EMA + hysteresis) and follows whichever language you're speaking
+- **Continuous transcript** — a draggable overlay accumulates the full text; a small model cleans the raw stream in the background (punctuation, mis-recognition fixes, paragraph breaks) — the grey tail keeps flowing in and is replaced by polished white text seconds later
+- **Ask Kilo** — the input field talks straight to a codex agent (carrying the recent transcript + session memory); tool-use steps surface live, replies stream typewriter-style; tell it to take a note and it writes into `~/.kilo/`, and paths in its replies open on click
+- **Shake to capture** — wiggle the cursor to enter selection mode: the screen dims, the UI element under the cursor lights up, left-click collects it (text as text, anything else as a screenshot), right-click ends. Captures become chips above the input field, handed to codex on the next turn
 
 ## Pipeline
 
 ```
-系統音訊 (ScreenCaptureKit) ─→ SpeechAnalyzer ─→ 瀏海字幕 (volatile/final)
+system audio (ScreenCaptureKit) ─→ SpeechAnalyzer ─→ notch captions (volatile/final)
                                       │
-                                      └→ 連續逐字稿 ─→ 小模型整理 (gpt-5.4-mini)
-                                                            │
-晃游標 ─→ dim + AX spotlight ─→ 點擊圈選 ──── chips ──────→ codex exec（resume session）─→ feed
+                                      └→ continuous transcript ─→ small-model cleanup (gpt-5.4-mini)
+                                                                        │
+cursor shake ─→ dim + AX spotlight ─→ click to capture ── chips ──────→ codex exec (resume session) ─→ feed
 ```
 
-## 跑起來（不開 Xcode）
+## Running it (no Xcode)
 
 ```bash
 make run       # build + bundle + codesign + open
-make install   # 裝進 /Applications（開機自啟與穩定 TCC 都需要）
-make locales   # dump SpeechTranscriber 支援語言
-make logs      # 即時看 Telemetry（asr / polish / agent / shake）
+make install   # install into /Applications (needed for launch-at-login and stable TCC)
+make locales   # dump SpeechTranscriber supported languages
+make logs      # live Telemetry (asr / polish / agent / shake)
 ```
 
-裝好後選單列會有 kilo 圖示 — 開逐字稿資料夾、權限設定、開機自啟、重啟、結束都在那。
+Once installed, a kilo item appears in the menu bar — open the transcript folder, permission shortcuts, launch-at-login, restart, quit.
 
-## 分發（給別人）
+## Distribution (sharing it)
 
 ```bash
-make dmg       # 開發態 app 打成 DMG（對方需「右鍵 → 打開」繞過 Gatekeeper）
-make release   # Developer ID 簽 + Apple 公證 + DMG，對方雙擊即裝
+make dmg       # dev-build app into a DMG (recipient must right-click → Open past Gatekeeper)
+make release   # Developer ID sign + Apple notarize + DMG; recipient double-clicks to install
 ```
 
-`release` 一次性前置：Apple Developer Program 簽發 **Developer ID Application** cert、`xcrun notarytool store-credentials kilo-notary …` 存公證憑證、`Makefile.local` 設 `DEV_ID_APP`（見 Makefile `release` 註解）。
+One-time setup for `release`: an **Developer ID Application** cert from the Apple Developer Program, `xcrun notarytool store-credentials kilo-notary …` to save notary credentials, and `DEV_ID_APP` in `Makefile.local` (see the `release` comment in the Makefile).
 
-需求：
+Requirements:
 
-- **macOS 26+**（SpeechAnalyzer）
-- **Apple Development cert** — hash 放 `Makefile.local` 的 `SIGN_ID`（gitignored），沒有就 ad-hoc 簽
-- **codex CLI** 在 PATH（agent 引擎；`zsh -lc` 載入，fnm shim 也通）
-- **OpenAI key** 在 Keychain（`service=kilo account=openai`）— agent 與逐字稿整理的 fallback 用；沒有 key 字幕與逐字稿照常，agent 停用
-- 權限：**螢幕錄製**（系統音訊 + 圈選截圖）、**輔助使用**（shake 的元素探測與點擊攔截），首次啟動會提示
+- **macOS 26+** (SpeechAnalyzer)
+- **Apple Development cert** — hash in `Makefile.local` as `SIGN_ID` (gitignored); falls back to ad-hoc signing without one
+- **codex CLI** on PATH (the agent engine; loaded via `zsh -lc`, works through an fnm shim)
+- **OpenAI key** in the Keychain (`service=kilo account=openai`) — used by the agent and transcript cleanup; without it, captions and the transcript still work, the agent is disabled
+- Permissions: **Screen Recording** (system audio + capture screenshots) and **Accessibility** (shake's element probing + click interception), prompted on first launch
 
-逐字稿整理走 `gpt-5.4-mini` 直打 API（沒 OpenAI key → 原文直出，不整理）。
+Transcript cleanup goes through `gpt-5.4-mini` over the API directly (no OpenAI key → raw text passes through unpolished).
 
 ```bash
-./build/kilo.app/Contents/MacOS/kilo --langs zh-TW,en-US   # 雙路信心擇優（預設）
-./build/kilo.app/Contents/MacOS/kilo --lang ja-JP          # 單語模式
+./build/kilo.app/Contents/MacOS/kilo --langs zh-TW,en-US   # dual-path confidence routing (default)
+./build/kilo.app/Contents/MacOS/kilo --lang ja-JP          # single language
 ```
 
-## 隱私 — 資料去哪
+## Privacy — where data goes
 
-kilo 是感官 agent，會錄系統音訊、截你圈選的畫面。資料流向講清楚：
+kilo is a sensory agent: it records system audio and screenshots what you select. The data flow, spelled out:
 
-| 資料 | 去哪 |
+| Data | Where it goes |
 |---|---|
-| 系統音訊 | **本機** SpeechAnalyzer 即時轉錄，音訊不離開你的 Mac |
-| 逐字稿 | 送 **OpenAI** `gpt-5.4-mini` 整理潤稿 |
-| 你的指令 + 最近逐字稿 + 圈選截圖 | 送 **codex / OpenAI** 產生回應 |
-| 筆記 / 逐字稿存檔 | **本機** `~/.kilo`，不上傳 |
+| System audio | **On-device** SpeechAnalyzer transcription — audio never leaves your Mac |
+| Transcript | Sent to **OpenAI** `gpt-5.4-mini` for cleanup |
+| Your instruction + recent transcript + selected screenshots | Sent to **codex / OpenAI** to generate a reply |
+| Notes / transcript archive | **Local** `~/.kilo`, never uploaded |
 
-**key 與 codex 都是你自己的** — kilo 用你 Keychain 裡的 OpenAI key、你 PATH 上的 codex CLI，不內建、不代管、不經過作者的任何伺服器。送什麼給 OpenAI 由你的使用決定，kilo 只是把它接起來；逐字稿與筆記只存在你本機的 `~/.kilo`。
+**The key and codex are your own** — kilo uses the OpenAI key in your Keychain and the codex CLI on your PATH; it bundles neither, manages neither, and routes nothing through the author's servers. What gets sent to OpenAI is decided by how you use it; kilo just wires it up. Transcripts and notes live only in your local `~/.kilo`.
 
-## 結構
+## Layout
 
 ```
 Sources/kilo/
-├── App/         main.swift — 接線與啟動
-├── Audio/       ScreenCaptureKit 系統音訊 → PCM
-├── Transcript/  SpeechAnalyzer 轉錄 + store + 小模型整理
-├── Agent/       codex exec --json 串流 + session resume
-├── Overlay/     瀏海字幕 + 主視窗（逐字稿 / feed / chips）
+├── App/         main.swift — wiring & launch
+├── Audio/       ScreenCaptureKit system audio → PCM
+├── Transcript/  SpeechAnalyzer transcription + store + small-model cleanup
+├── Agent/       codex exec --json streaming + session resume
+├── Overlay/     notch captions + main window (transcript / feed / chips)
 ├── Core/        Telemetry / Keychain / Metrics
-└── Shake/       晃游標圈選（ported from zyx1121/shake）
+└── Shake/       cursor-shake capture (ported from zyx1121/shake)
 ```
 
-## 設計依據
+## Design notes
 
-`docs/` — [SpeechAnalyzer survey](docs/speechanalyzer-survey.md)、[瀏海 overlay 自刻筆記](docs/macos-notch-overlay.md)、[CLI 開發流程](docs/macos-cli-dev.md)。
+`docs/` — [SpeechAnalyzer survey](docs/speechanalyzer-survey.md), [notch overlay notes](docs/macos-notch-overlay.md), [CLI dev workflow](docs/macos-cli-dev.md), [AX-actions feasibility](docs/ax-actions-survey.md), [distribution checklist](docs/distribution-checklist.md). (Written in 繁體中文.)
