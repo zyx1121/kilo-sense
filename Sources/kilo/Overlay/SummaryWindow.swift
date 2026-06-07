@@ -66,6 +66,9 @@ struct TranscriptView: View {
     let controller: AgentController
     @State private var input = ""
 
+    /// feed step 與輸入框 icon 共用的 gutter 寬 — 所有 icon 的中心落在同一條垂直線。
+    private let iconGutter: CGFloat = 16
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Kilo")
@@ -134,7 +137,7 @@ struct TranscriptView: View {
                             attachmentChip(asset)
                         }
                     }
-                    .padding(.horizontal, 14).padding(.vertical, 7)
+                    .padding(.horizontal, 16).padding(.vertical, 7)
                 }
                 .background(.white.opacity(0.04))
             }
@@ -142,7 +145,8 @@ struct TranscriptView: View {
             // 指令輸入 → codex agent；相機 = 截游標所在螢幕變 chip
             HStack(spacing: 8) {
                 Image(systemName: "sparkle")
-                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
+                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.45))
+                    .frame(width: iconGutter)  // 跟 feed step 的 icon 對齊同一條垂直線
                 TextField("問 Kilo，或叫它記錄…", text: $input)
                     .textFieldStyle(.plain).font(.system(size: 12)).foregroundStyle(.white)
                     .onSubmit { controller.submit(input); input = "" }
@@ -151,12 +155,12 @@ struct TranscriptView: View {
                     controller.captureScreen()
                 } label: {
                     Image(systemName: "camera.viewfinder")
-                        .font(.system(size: 12)).foregroundStyle(.white.opacity(0.45))
+                        .font(.system(size: 13)).foregroundStyle(.white.opacity(0.45))
                 }
                 .buttonStyle(.plain)
                 .help("截整個螢幕給 Kilo 看")
             }
-            .padding(.horizontal, 14).padding(.vertical, 9)
+            .padding(.horizontal, 16).padding(.vertical, 9)
             .background(.white.opacity(0.06))
         }
         .frame(width: 360)
@@ -209,33 +213,52 @@ struct TranscriptView: View {
             + styled(store.volatileShown, 0.38)
     }
 
+    /// 一律 [固定寬 icon gutter][內容]：四種 step 的文字左緣對齊同一條線，icon 中心也對齊輸入框 sparkle。
     @ViewBuilder
     private func stepRow(_ step: AgentStep) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            stepIcon(step).frame(width: iconGutter, alignment: .center)
+            stepBody(step)
+        }
+        .padding(.top, step.kind == .user ? 4 : 0)  // 每輪指令前留一點空，視覺分段
+    }
+
+    @ViewBuilder
+    private func stepIcon(_ step: AgentStep) -> some View {
         switch step.kind {
         case .user:
-            // 跟輸入框同款 sparkle，視覺上一條指令一個段落
-            HStack(spacing: 8) {
-                Image(systemName: "sparkle")
-                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
-                Text(step.text)
-                    .font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
-                    .lineLimit(2)
-            }
-            .padding(.top, 4)
+            Image(systemName: "sparkle").font(.system(size: 11)).foregroundStyle(.white.opacity(0.45))
         case .tool:
-            HStack(spacing: 6) {
-                if step.running {
-                    ProgressView().controlSize(.mini)
-                } else {
-                    Image(systemName: step.failed ? "xmark.circle" : "checkmark.circle")
-                        .font(.system(size: 9))
-                        .foregroundStyle(step.failed ? .red.opacity(0.8) : .white.opacity(0.35))
-                }
-                Text(step.text)
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .lineLimit(1)
+            if step.running {
+                ProgressView().controlSize(.mini)
+            } else {
+                Image(systemName: step.failed ? "xmark.circle" : "checkmark.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(step.failed ? .red.opacity(0.8) : .white.opacity(0.35))
             }
+        case .reply:
+            // Kilo 說話的標記（cyan），跟 user 的灰 sparkle 形成你問它答的對話節奏
+            Image(systemName: "sparkle").font(.system(size: 11)).foregroundStyle(.cyan.opacity(0.9))
+        case .error:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10)).foregroundStyle(.orange.opacity(0.9))
+        }
+    }
+
+    @ViewBuilder
+    private func stepBody(_ step: AgentStep) -> some View {
+        switch step.kind {
+        case .user:
+            Text(step.text)
+                .font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .tool:
+            Text(step.text)
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.5))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
         case .reply:
             Text(prefix(step.rendered, step.shownChars))
                 .font(.system(size: 12)).foregroundStyle(.cyan.opacity(0.9))
@@ -243,8 +266,9 @@ struct TranscriptView: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .error:
-            Text("⚠️ \(step.text)")
+            Text(step.text)
                 .font(.system(size: 11)).foregroundStyle(.orange.opacity(0.9))
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
