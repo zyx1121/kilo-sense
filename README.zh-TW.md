@@ -51,6 +51,7 @@ make logs      # 即時看 Telemetry（asr / polish / agent / shake）
 ```bash
 make dmg       # 開發態 app 打成 DMG（對方需「右鍵 → 打開」繞過 Gatekeeper）
 make release   # Developer ID 簽 + Apple 公證 + DMG，對方雙擊即裝
+make publish   # make release + 傳上 GitHub Release（簽名私鑰不出本機）
 ```
 
 `release` 一次性前置：Apple Developer Program 簽發 **Developer ID Application** cert、`xcrun notarytool store-credentials kilo-notary …` 存公證憑證、`Makefile.local` 設 `DEV_ID_APP`（見 Makefile `release` 註解）。

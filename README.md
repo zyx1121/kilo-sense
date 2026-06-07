@@ -51,6 +51,7 @@ Once installed, a kilo item appears in the menu bar — open the transcript fold
 ```bash
 make dmg       # dev-build app into a DMG (recipient must right-click → Open past Gatekeeper)
 make release   # Developer ID sign + Apple notarize + DMG; recipient double-clicks to install
+make publish   # make release + upload the DMG to a GitHub Release (signing key stays on your machine)
 ```
 
 One-time setup for `release`: an **Developer ID Application** cert from the Apple Developer Program, `xcrun notarytool store-credentials kilo-notary …` to save notary credentials, and `DEV_ID_APP` in `Makefile.local` (see the `release` comment in the Makefile).
