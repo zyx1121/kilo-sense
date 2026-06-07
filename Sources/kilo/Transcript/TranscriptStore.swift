@@ -77,15 +77,24 @@ private func glue(_ a: String, _ b: String) -> String {
     return wordy(last) && wordy(first) ? a + " " + b : a + b
 }
 
+/// 待整理的一段定稿 — 帶語言標籤（polisher 按語言分批整理，指令語言跟著走才不會被翻譯）。
+struct PendingSegment {
+    let locale: String   // bcp47，如 "zh-TW"
+    let text: String
+}
+
 /// 逐字稿連續文件流 + Kilo agent 步驟 feed。window 顯示、codex agent 讀來思考。
-/// 逐字稿三層：polished（小模型整理過）→ pendingRaw(定稿待整理) → volatile（辨識中，打字機推進）。
+/// 逐字稿三層：polished（小模型整理過）→ pending（定稿待整理，帶 locale）→ volatile（辨識中，打字機推進）。
 @MainActor @Observable
 final class TranscriptStore {
     private(set) var polished = ""
-    private(set) var pendingRaw = ""
+    private(set) var pending: [PendingSegment] = []
     private(set) var volatileShown = ""
     private var volatileTarget = ""
     private var volatileTask: Task<Void, Never>?
+
+    /// 顯示與 codex context 用的待整理全文。
+    var pendingRaw: String { pending.reduce("") { glue($0, $1.text) } }
 
     private(set) var feed: [AgentStep] = []
     private(set) var thinking = false
@@ -108,18 +117,34 @@ final class TranscriptStore {
         pumpVolatile()
     }
 
-    func commitFinal(_ text: String) {
+    func commitFinal(_ text: String, locale: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         volatileTask?.cancel(); volatileTask = nil
         volatileTarget = ""; volatileShown = ""
         guard !t.isEmpty else { return }
-        pendingRaw = glue(pendingRaw, t)
-        if pendingRaw.count > 12000 { pendingRaw = String(pendingRaw.suffix(9000)) }  // 無 polisher 時的安全閥
+        pending.append(PendingSegment(locale: locale, text: t))  // 一筆 final 一段，不合併 — polisher 按段消耗才不會吃到飛中的新字
+        while pendingRaw.count > 12000, !pending.isEmpty { pending.removeFirst() }  // 無 polisher 時的安全閥
     }
 
-    /// polisher 整理完一個 chunk：從 pendingRaw 頭部移掉 consumed 字、整理後文字接上 polished。
-    func commitPolished(_ cleaned: String, consumed: Int) {
-        pendingRaw = String(pendingRaw.dropFirst(min(consumed, pendingRaw.count)))
+    /// pending 開頭「同語言的連續段」— polisher 的一個整理批次。
+    /// boundary = 後面還接著別的語言（語言切換點，提示 polisher 別等湊字數、快點沖掉）。
+    func firstPendingRun() -> (locale: String, text: String, segments: Int, boundary: Bool)? {
+        guard let first = pending.first else { return nil }
+        var text = first.text
+        var n = 1
+        for seg in pending.dropFirst() {
+            guard seg.locale == first.locale else {
+                return (first.locale, text, n, true)
+            }
+            text = glue(text, seg.text)
+            n += 1
+        }
+        return (first.locale, text, n, false)
+    }
+
+    /// polisher 整理完一批：移掉消耗的段、整理後文字接上 polished。
+    func commitPolished(_ cleaned: String, consumedSegments: Int) {
+        pending.removeFirst(min(consumedSegments, pending.count))
         let c = trimOverlap(cleaned.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !c.isEmpty else { return }
         polished = polished.isEmpty ? c : glue(polished, c)

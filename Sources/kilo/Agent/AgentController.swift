@@ -22,9 +22,9 @@ final class AgentController {
         store.setVolatile(text)
     }
 
-    /// 每段定稿進逐字稿（顯示 + codex context），並戳 polisher 整理。
-    func appendFinal(_ text: String) {
-        store.commitFinal(text)
+    /// 每段定稿進逐字稿（顯示 + codex context），並戳 polisher 整理。locale 跟著進 pending，整理時選對指令語言。
+    func appendFinal(_ text: String, locale: String) {
+        store.commitFinal(text, locale: locale)
         metrics.recordSegment(chars: text.count)
         polisher.nudge()
     }

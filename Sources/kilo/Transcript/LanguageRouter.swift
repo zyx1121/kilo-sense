@@ -52,7 +52,7 @@ final class LanguageRouter {
         }
         if r.isFinal {
             captions.commitFinal(r.text)
-            controller.appendFinal(r.text)
+            controller.appendFinal(r.text, locale: r.locale)
         } else {
             captions.setVolatile(r.text)
             controller.appendVolatile(r.text)
@@ -87,6 +87,6 @@ final class LanguageRouter {
         dropped[active] = []
         guard !run.isEmpty else { return }
         Telemetry.asr.info("backfill \(run.count, privacy: .public) finals after switch to \(self.active, privacy: .public)")
-        for text in run.reversed() { controller.appendFinal(text) }
+        for text in run.reversed() { controller.appendFinal(text, locale: active) }
     }
 }
