@@ -20,7 +20,6 @@ struct ASRResult {
 @MainActor
 final class Transcriber {
     private let locale: Locale
-    private let contextualStrings: [String]?
     private let onResult: @MainActor (ASRResult) -> Void
     private var transcriber: SpeechTranscriber?
     private var analyzer: SpeechAnalyzer?
@@ -30,12 +29,8 @@ final class Transcriber {
     private var resultsTask: Task<Void, Never>?
     private let converter = BufferConverter()
 
-    /// contextualStrings：詞彙偏置（AnalysisContext）— mic 路用來讓 ASR 認得 "kilo"，
-    /// 不偏置時 zh 模型的語言先驗會把它拗成 Klow/Helow/Hello（真機實測）。
-    init(locale: Locale, contextualStrings: [String]? = nil,
-         onResult: @escaping @MainActor (ASRResult) -> Void) {
+    init(locale: Locale, onResult: @escaping @MainActor (ASRResult) -> Void) {
         self.locale = locale
-        self.contextualStrings = contextualStrings
         self.onResult = onResult
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
         self.inputSequence = stream
@@ -51,12 +46,6 @@ final class Transcriber {
         self.transcriber = transcriber
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         self.analyzer = analyzer
-
-        if let contextualStrings {
-            let ctx = AnalysisContext()
-            ctx.contextualStrings = [.general: contextualStrings]
-            try await analyzer.setContext(ctx)  // start 前設一次
-        }
 
         try await ensureModel(transcriber: transcriber, locale: locale)
 
@@ -83,13 +72,6 @@ final class Transcriber {
         }
 
         try await analyzer.start(inputSequence: inputSequence)
-
-        if let contextualStrings {
-            // start 後再設一次 — setContext 的生效時序文件沒講清楚，兩邊都掛上（冪等、無害）
-            let ctx = AnalysisContext()
-            ctx.contextualStrings = [.general: contextualStrings]
-            try await analyzer.setContext(ctx)
-        }
     }
 
     /// run 平均信心（以字元數加權；volatile 可能整串沒有 → nil）。

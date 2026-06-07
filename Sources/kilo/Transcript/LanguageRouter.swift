@@ -62,8 +62,6 @@ final class LanguageRouter {
                 Telemetry.asr.info("final dropped (noise) [\(r.locale, privacy: .public)] conf=\(r.confidence ?? -1, format: .fixed(precision: 2), privacy: .public)")
                 return
             }
-            // 語音指令不在這裡 — 系統音訊是「世界的聲音」，影片喊 kilo 不能對 agent 下指令；
-            // 指令只走麥克風路（main.swift 的 mic pipeline + VoiceCommand）。
             captions.commitFinal(r.text)
             controller.appendFinal(r.text, locale: r.locale)
         } else {

@@ -34,9 +34,6 @@ final class AgentController {
     private let screenCapturer = Capturer()
     private var threadID: String?  // codex session，app 重啟歸零
 
-    /// router 的語音指令路徑需要知道 agent 是否忙著（忙著就當一般逐字稿）。
-    var isThinking: Bool { store.thinking }
-
     init(store: TranscriptStore, agent: CodexAgent?, metrics: MetricsStore, polisher: TranscriptPolisher) {
         self.store = store
         self.agent = agent

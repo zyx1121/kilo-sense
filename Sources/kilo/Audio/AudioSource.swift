@@ -6,8 +6,8 @@ struct PCMBuffer: @unchecked Sendable {
     let pcm: AVAudioPCMBuffer
 }
 
-/// 音訊來源抽象。M1b 只有 SystemAudioSource（ScreenCaptureKit 系統音訊）；
-/// M3 再加麥克風來源，只需多一個 conformance，pipeline 其餘不動。
+/// 音訊來源抽象。目前唯一實作是 SystemAudioSource（ScreenCaptureKit 系統音訊）；
+/// 要加別的音源（如特定 app loopback）多一個 conformance 即可，pipeline 其餘不動。
 protocol AudioSource {
     /// 啟動擷取，回傳一串 PCM buffer 供呼叫端拉去轉錄。
     func start() async throws -> AsyncStream<PCMBuffer>
