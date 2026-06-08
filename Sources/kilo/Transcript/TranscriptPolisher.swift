@@ -48,6 +48,7 @@ final class TranscriptPolisher {
     private let model = "gpt-5.4-mini"
     private var running = false
     private var idleTask: Task<Void, Never>?
+    private let pairLogger = PolishPairLogger()  // 蒸餾訓練料：(raw → cleaned) 配對累積
 
     var backendName: String { apiKey == nil ? "無（原文直出）" : model }
 
@@ -83,6 +84,9 @@ final class TranscriptPolisher {
                 let cleaned = try await polish(chunk: run.text, locale: run.locale, contextTail: tail)
                 committed = store.commitPolished(cleaned.isEmpty ? run.text : cleaned, locale: run.locale, consumedSegments: run.segments)
                 Telemetry.polish.info("polished [\(run.locale, privacy: .public)] \(run.text.count, privacy: .public) -> \(cleaned.count, privacy: .public) chars")
+                if !cleaned.isEmpty {
+                    pairLogger.log(raw: run.text, cleaned: cleaned, locale: run.locale, contextTail: tail)
+                }
             } catch {
                 committed = store.commitPolished(run.text, locale: run.locale, consumedSegments: run.segments)  // 原文轉正，不卡顯示
                 Telemetry.polish.error("polish failed: \(error.localizedDescription, privacy: .public)")
