@@ -11,7 +11,8 @@ final class AttributionEnricher {
     private let timeline: SpeakerTimeline
     private let apiKey: String?
     private let model = "gpt-5.4-mini"
-    private let interval: TimeInterval = 60   // 兩輪之間最少間隔
+    private let interval: TimeInterval = 60          // 還有未命名講者時的節奏
+    private let steadyInterval: TimeInterval = 600   // 全員已命名後降速 — 省 LLM 也少給 variance 翻盤機會
     private var lastVersion = 0
     private var lastRun = Date.distantPast
     private var running = false
@@ -45,11 +46,14 @@ final class AttributionEnricher {
     }
 
     private func maybeRun() async {
-        guard !running,
-              store.turnsVersion != lastVersion,
-              Date().timeIntervalSince(lastRun) >= interval else { return }
+        guard !running, store.turnsVersion != lastVersion else { return }
         let turns = speakerTurns()
-        guard Set(turns.map(\.letter)).count >= 2 else { return }  // 單講者沒歸屬可推
+        let letters = Set(turns.map(\.letter))
+        guard letters.count >= 2 else { return }  // 單講者沒歸屬可推
+        // 穩態降速：近期輪替裡每個講者都已有顯示名 → 10 分鐘才重驗一次（慢速自癒，
+        // 防換內容後字母沿用造成的舊名殘留）；還有人沒名字 → 照常 60s
+        let everyoneNamed = letters.allSatisfy { timeline.hasDisplayName(forLetter: $0) }
+        guard Date().timeIntervalSince(lastRun) >= (everyoneNamed ? steadyInterval : interval) else { return }
         running = true
         defer { running = false }
         lastVersion = store.turnsVersion
