@@ -77,6 +77,7 @@ final class PushToTalk {
     private func release() {
         guard store.pttRecording else { return }
         store.pttRecording = false
+        store.pttTailUntil = Date().addingTimeInterval(1.5)  // 會議模式據此繼續閃避遲到的 PTT final
         Telemetry.ptt.info("release")
         Task { [weak self] in
             guard let self else { return }

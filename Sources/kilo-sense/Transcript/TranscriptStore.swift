@@ -111,6 +111,8 @@ final class TranscriptStore {
     // — PTT（按住右 ⇧ 說話）：草稿放 store 才能讓語音注入；view 雙向綁定同一份 —
     var inputDraft = ""
     var pttRecording = false
+    /// PTT 放開後的尾段窗（遲到 final 還算 PTT 的）— 會議模式靠這個避開「對 Kilo 說的話進會議記錄」。
+    var pttTailUntil = Date.distantPast
 
     // — overlay 可見性：shake / 打字 / agent 活動 / hover 續命，閒置自動收合 —
     // 聲音（逐字稿流入）刻意不續命：那是 notch 的展開條件，overlay 只跟「使用者在動它」走。
