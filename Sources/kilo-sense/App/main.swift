@@ -52,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startPushToTalk()
     }
 
-    /// 按住右 ⌥ 對 Kilo 說話 — 口述語言取 --langs 第一個（你自己講話的主語言）。
+    /// 按住右 ⇧ 對 Kilo 說話 — 口述語言取 --langs 第一個（你自己講話的主語言）。
     private func startPushToTalk() {
         let ptt = PushToTalk(store: transcript, locale: Locale(identifier: parsedLangs()[0]))
         ptt.start()

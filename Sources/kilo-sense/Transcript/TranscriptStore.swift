@@ -108,7 +108,7 @@ final class TranscriptStore {
     /// shake 圈選收進來、等下一輪 codex 帶上的素材。
     private(set) var attachments: [Asset] = []
 
-    // — PTT（按住右 ⌥ 說話）：草稿放 store 才能讓語音注入；view 雙向綁定同一份 —
+    // — PTT（按住右 ⇧ 說話）：草稿放 store 才能讓語音注入；view 雙向綁定同一份 —
     var inputDraft = ""
     var pttRecording = false
 

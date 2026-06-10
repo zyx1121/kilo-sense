@@ -2,12 +2,12 @@ import AppKit
 import AVFoundation
 import Foundation
 
-/// 按住右 Option 對 Kilo 說話：mic → 即時轉錄 → overlay 輸入框（volatile 即時跟打，放開定格可改可送）。
+/// 按住右 Shift 對 Kilo 說話：mic → 即時轉錄 → overlay 輸入框（volatile 即時跟打，放開定格可改可送）。
 /// 不持續錄音 — 按住才開 mic、放開即停；辨識引擎首次按下時暖機，之後常駐（免每次等 setUp）。
 @MainActor
 final class PushToTalk {
-    /// 右 Option 的 keyCode（左 = 58）。選右 ⌥：單手好按、不撞系統聽寫（fn）與常用快捷鍵。
-    private let keyCode: UInt16 = 61
+    /// 右 Shift 的 keyCode（左 = 56）。選右 ⇧：外接鍵盤也有（右 ⌥ 常缺）、不撞系統聽寫（fn）。
+    private let keyCode: UInt16 = 60
 
     private let store: TranscriptStore
     private let locale: Locale
@@ -40,7 +40,7 @@ final class PushToTalk {
 
     private func handleFlags(_ e: NSEvent) {
         guard e.keyCode == keyCode else { return }
-        if e.modifierFlags.contains(.option) { press() } else { release() }
+        if e.modifierFlags.contains(.shift) { press() } else { release() }
     }
 
     private func press() {

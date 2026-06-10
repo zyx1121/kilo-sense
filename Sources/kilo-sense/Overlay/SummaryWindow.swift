@@ -141,7 +141,7 @@ struct TranscriptView: View {
                 .background(.white.opacity(0.04))
             }
 
-            // 指令輸入 → codex agent；按住右 ⌥ 語音口述；相機 = 截游標所在螢幕變 chip
+            // 指令輸入 → codex agent；按住右 ⇧ 語音口述；相機 = 截游標所在螢幕變 chip
             HStack(spacing: 8) {
                 if store.pttRecording {
                     Image(systemName: "mic.fill")
@@ -152,7 +152,7 @@ struct TranscriptView: View {
                         .foregroundStyle(.white.opacity(0.45))
                         .frame(width: iconGutter)  // 跟 feed step 的 icon 對齊同一條垂直線
                 }
-                TextField(store.pttRecording ? "聽你說…" : "問 Kilo，或叫它記錄…（按住右 ⌥ 說話）",
+                TextField(store.pttRecording ? "聽你說…" : "問 Kilo，或叫它記錄…（按住右 ⇧ 說話）",
                           text: $store.inputDraft)
                     .textFieldStyle(.plain).font(.system(size: 12)).foregroundStyle(.white)
                     .onSubmit { controller.submit(store.inputDraft); store.inputDraft = "" }
