@@ -14,6 +14,7 @@ actor SpeakerDiarizerPump {
         case audio(PCMBuffer, streamSeconds: Double)
         case gap   // 會議關閉 → 下次恢復重算 offset
         case enroll(name: String, ranges: [(start: Double, end: Double)])  // 命名 → 聲紋註冊
+        case warmup  // 開機預熱：先 init + re-enroll,首句語音就認得人（不等 speech gate）
     }
 
     private let timeline: SpeakerTimeline
@@ -26,7 +27,9 @@ actor SpeakerDiarizerPump {
     private var segments: [SpeakerTimeline.Segment] = []
     // 近 120s 原始音訊（stream 時間索引）— 聲紋註冊要回撈該講者的片段
     private var ring: [(samples: [Float], start: Double)] = []
+    private var ringSamples = 0   // running total — 免每顆 buffer O(n) reduce
     private var enrolledNames: Set<String> = []
+    private var lastPublish = Date.distantPast  // 純暫定段的發布節流
 
     init(timeline: SpeakerTimeline) {
         self.timeline = timeline
@@ -49,6 +52,11 @@ actor SpeakerDiarizerPump {
         intake.yield(.enroll(name: name, ranges: ranges))
     }
 
+    /// 開機預熱（有聲紋庫才值得）— 不預熱的話 re-enroll 跟第一句語音賽跑，首句會 miss。
+    nonisolated func warmUp() {
+        intake.yield(.warmup)
+    }
+
     private func run() async {
         for await item in queue {
             switch item {
@@ -58,27 +66,41 @@ actor SpeakerDiarizerPump {
                 await consume(buffer, streamSeconds: streamSeconds)
             case .enroll(let name, let ranges):
                 enroll(name: name, ranges: ranges)
+            case .warmup:
+                await ensureDiarizer()
             }
         }
     }
 
-    private func consume(_ buffer: PCMBuffer, streamSeconds: Double) async {
+    /// init diarizer（含首次 model 下載）+ 把存檔聲紋 re-enroll 回去。冪等。
+    private func ensureDiarizer() async {
+        guard diarizer == nil else { return }
         do {
-            if diarizer == nil {
-                Telemetry.meeting.info("diarizer init…（首次需下載 model）")
-                let d = LSEENDDiarizer()
-                try await d.initialize(variant: .dihard3)
-                diarizer = d
-                Telemetry.meeting.info("diarizer ready")
-                reenrollSavedVoices(d)  // 開機把 ~/.kilo/voices 的聲紋註冊回去 — 跨 session 認人
-            }
+            Telemetry.meeting.info("diarizer init…（首次需下載 model）")
+            let d = LSEENDDiarizer()
+            try await d.initialize(variant: .dihard3)
+            diarizer = d
+            Telemetry.meeting.info("diarizer ready")
+            reenrollSavedVoices(d)  // 聲紋註冊回去 — 跨 session 認人
+        } catch {
+            Telemetry.meeting.error("diarizer init failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func consume(_ buffer: PCMBuffer, streamSeconds: Double) async {
+        await ensureDiarizer()
+        do {
             guard let diarizer, let samples = Self.samples(buffer.pcm) else { return }
             if idle {
                 offset = streamSeconds - fedSeconds
                 idle = false
             }
             ring.append((samples, streamSeconds))
-            while ring.reduce(0, { $0 + $1.samples.count }) > 120 * 16_000 { ring.removeFirst() }
+            ringSamples += samples.count
+            while ringSamples > 120 * 16_000, let first = ring.first {
+                ringSamples -= first.samples.count
+                ring.removeFirst()
+            }
             try diarizer.addAudio(samples, sourceSampleRate: 16_000)
             fedSeconds += Double(samples.count) / 16_000
             if let update = try diarizer.process() {
@@ -155,6 +177,10 @@ actor SpeakerDiarizerPump {
         // 才查得到講者；定稿段一到，下次 update 的暫定段自然不再涵蓋該區間。
         let tentative = update.tentativeSegments.map(convert)
         guard !new.isEmpty || !tentative.isEmpty else { return }
+        // 發布節流：標籤解析在 polisher 取批時（秒級）才讀 — 純暫定更新沒必要 10Hz
+        // 跨 actor 複製整條時間軸；有定稿段照樣立即發。
+        if new.isEmpty, Date().timeIntervalSince(lastPublish) < 0.5 { return }
+        lastPublish = Date()
         for s in new {  // segment 級觀測：diarizer 到底分出幾個講者、時間段落在哪
             Telemetry.meeting.info("segment spk=\(s.speaker, privacy: .public) \(s.start, format: .fixed(precision: 1), privacy: .public)s–\(s.end, format: .fixed(precision: 1), privacy: .public)s")
         }
@@ -249,6 +275,11 @@ final class SpeakerTimeline {
     func resetAnonymous() {
         letters = [:]
         displayNames = [:]
+    }
+
+    /// 該字母是否已有顯示名（enricher 穩態降速的判斷）。
+    func hasDisplayName(forLetter l: String) -> Bool {
+        displayNames[l] != nil
     }
 
     /// 某字母講者近期的時間片段（給聲紋註冊撈音訊）：新到舊、總長封頂 15s。

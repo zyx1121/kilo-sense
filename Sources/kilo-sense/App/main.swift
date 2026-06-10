@@ -61,6 +61,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         enricher.pumpProvider = { [weak self] in self?.speakerPump }
         enricher.start()
         self.enricher = enricher
+
+        // 有聲紋庫 → 開機預熱 diarizer + re-enroll，第一句語音就認得人（否則跟首句賽跑會 miss）
+        if !VoiceStore.loadAll().isEmpty {
+            let pump = SpeakerDiarizerPump(timeline: speakerTimeline)
+            pump.warmUp()
+            speakerPump = pump
+        }
     }
 
     /// 會議模式：選單列開關 → mic 持續錄（我這側），與系統音訊雙流分轉。
