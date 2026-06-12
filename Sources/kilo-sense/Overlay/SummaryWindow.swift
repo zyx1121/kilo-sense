@@ -286,7 +286,13 @@ struct TranscriptView: View {
         return .discarded  // 找不到就吞掉，不彈 -50 dialog
     }
 
-    /// 三層透明度 + 講者標頭：已整理（按講者分塊，換人標名）→ 定稿待整理 → 辨識中。
+    private static let blockTimeFormat: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    /// 三層透明度 + 塊標頭（時間戳 + 講者）：已整理（按講者分塊）→ 定稿待整理 → 辨識中。
     /// 灰字尾巴沒有標頭 — 講者刻意延後到整理批次時才解析（diarizer 收斂比 final 慢）。
     private var transcriptText: AttributedString {
         func styled(_ s: String, _ opacity: Double) -> AttributedString {
@@ -297,13 +303,16 @@ struct TranscriptView: View {
         var out = AttributedString()
         for (i, block) in store.polishedBlocks.enumerated() {
             if i > 0 { out += styled("\n\n", 0.92) }
+            var header = AttributedString(Self.blockTimeFormat.string(from: block.at))
+            header.foregroundColor = .white.opacity(0.4)
+            header.font = .system(size: sz(10.5), weight: .semibold)
             if let speaker = block.speaker {
-                var label = AttributedString(speaker + "\n")
-                label.foregroundColor = .cyan.opacity(0.8)
-                label.font = .system(size: sz(10.5), weight: .semibold)
-                out += label
+                var name = AttributedString("  " + speaker)
+                name.foregroundColor = .cyan.opacity(0.8)
+                name.font = .system(size: sz(10.5), weight: .semibold)
+                header += name
             }
-            out += styled(block.text, 0.92)
+            out += header + AttributedString("\n") + styled(block.text, 0.92)
         }
         return out + styled(store.pendingRaw, 0.55) + styled(store.volatileShown, 0.38)
     }
