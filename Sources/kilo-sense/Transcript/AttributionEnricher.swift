@@ -78,9 +78,12 @@ final class AttributionEnricher {
     }
 
     /// recentTurns 裡帶講者代號的輪（app 來源的略過）；代號統一還原成字母。
+    /// 帶時間範圍的輪先「重新解析」— commit 當下 diarizer 可能還沒收斂（換手點的
+    /// 第一句常被掛錯人），讀時用收斂後的時間軸重查，吃到 tentative→finalized 的修訂。
     private func speakerTurns() -> [(letter: String, text: String)] {
         store.recentTurns.compactMap { turn in
-            guard let letter = timeline.canonicalLetter(for: turn.source) else { return nil }
+            let label = turn.range.flatMap { store.speakerResolver?($0) } ?? turn.source
+            guard let letter = timeline.canonicalLetter(for: label) else { return nil }
             return (letter, turn.text)
         }
     }
@@ -107,7 +110,6 @@ final class AttributionEnricher {
         for s in result.speakers {  // raw 輸出觀測 — 調 prompt / 驗證規則的依據
             Telemetry.enrich.info("raw \(s.label, privacy: .public) role=\(s.role, privacy: .public) name=\(s.name ?? "∅", privacy: .public) conf=\(s.confidence, format: .fixed(precision: 2), privacy: .public) ev=\(String((s.evidence ?? "∅").prefix(40)), privacy: .public)")
         }
-        var roleCount: [String: Int] = [:]
         var accepted: [(letter: String, role: String, name: String?)] = []
         for s in result.speakers where s.confidence >= 0.7 {
             let letter = s.label.replacingOccurrences(of: "講者 ", with: "")
@@ -124,47 +126,45 @@ final class AttributionEnricher {
                 return n
             }
             guard name != nil || s.role != "講者" else { continue }  // 無名 + 通用角色 = 沒資訊
-            if name == nil { roleCount[s.role, default: 0] += 1 }
             accepted.append((letter, s.role, name))
         }
         var names: [String: String] = [:]
         var personNames: [String: String] = [:]  // letter → 真人名（enroll 提案用，角色標籤不算）
         for a in accepted {
-            // 有名字用名字；同角色多人掛字母（來賓 A / 來賓 B），單人直接角色（旁白）
-            names[a.letter] = a.name ?? (roleCount[a.role, default: 0] > 1 ? "\(a.role) \(a.letter)" : a.role)
+            // 有名字用名字；沒名字的一律「角色 + 字母」（主持人 A / 來賓 B）—
+            // 未知身分永遠帶字母可區分，裸角色標會跟字母標混出幽靈第三人
+            names[a.letter] = a.name ?? "\(a.role) \(a.letter)"
             if let n = a.name { personNames[a.letter] = n }
         }
 
         // 自我介紹硬覆蓋：「我是 X」是最強歸屬訊號，但 mini 屢次鏡像對調（實戰：B 說
         //「我是賴芳玉」仍被綁給 A，conf 0.98）— prompt 教不動就 code 層強制：
         // 誰的輪替裡說了「我是 X」，X 就綁給誰；同名從其他字母上拔掉（鏡像的另一半）。
+        // 自介一致性檢查（不重綁！）：turn 的字母標籤在換手點不可靠 — 實測 diarizer
+        // 漏抓第二講者時，自介句會被記在錯的字母下；先前用字母硬覆蓋反而把 LLM 靠
+        // 內容推對的答案改錯。唯一字母無關的可靠約束：同一句裡「我是 N」的 N 與
+        // 被呼喚的 V 必屬不同人 — LLM 把兩名掛同一字母 = 必錯，整輪撤名、不 enroll。
         let candidates = Set(result.speakers.compactMap(\.name))
             .filter { corpus.contains($0) || phonCorpus.contains(Self.phonetic(Self.normalized($0))) }
-        let roleByLetter = Dictionary(accepted.map { ($0.letter, $0.role) }, uniquingKeysWith: { a, _ in a })
-        let activeLetters = Set(turns.map(\.letter))
+        var conflicted = false
         for hit in Self.selfIntroBindings(turns: turns, candidates: candidates) {
-            for (l, n) in personNames where n == hit.name && l != hit.letter {
-                personNames[l] = nil
-                // 被拔名的那方退回角色標籤（有的話），沒有就回匿名
-                names[l] = roleByLetter[l].flatMap { $0 == "講者" ? nil : $0 }
-            }
-            if personNames[hit.letter] != hit.name {
-                Telemetry.enrich.info("self-intro override: \(hit.letter, privacy: .public)→\(hit.name, privacy: .public)（LLM 原判 \(personNames[hit.letter] ?? names[hit.letter] ?? "∅", privacy: .public)）")
-                personNames[hit.letter] = hit.name
-                names[hit.letter] = hit.name
-            }
-            // 呼喚反綁：自介句裡同時出現的另一個候選名是「對方」的（「伯恩，大家好，
-            // 我是賴芳玉」→ 被喚的伯恩 = 另一方）— 僅限兩人對話，第三方無從歧義
-            guard activeLetters.count == 2,
-                  let other = activeLetters.first(where: { $0 != hit.letter }) else { continue }
             let phonText = Self.phonetic(Self.normalized(hit.text))
-            for cand in candidates where cand != hit.name
-                && phonText.contains(Self.phonetic(Self.normalized(cand))) {
-                guard personNames[other] == nil else { break }  // 對方已有自介/既有名就不蓋
-                Telemetry.enrich.info("vocative bind: \(other, privacy: .public)→\(cand, privacy: .public)（被 \(hit.name, privacy: .public) 呼喚）")
-                personNames[other] = cand
-                names[other] = cand
-                break
+            for voc in candidates where voc != hit.name
+                && phonText.contains(Self.phonetic(Self.normalized(voc))) {
+                // 同句出現 自介名 hit.name + 被喚名 voc → 兩名必屬不同字母
+                let sameLetter = personNames.first { $0.value == hit.name }?.key
+                    == personNames.first { $0.value == voc }?.key
+                if sameLetter, personNames.values.contains(hit.name) {
+                    Telemetry.enrich.info("self-intro conflict: \(hit.name, privacy: .public) 與 \(voc, privacy: .public) 被掛同字母 — 本輪撤名")
+                    conflicted = true
+                }
+            }
+        }
+        if conflicted {
+            personNames = [:]
+            names = [:]
+            for a in accepted where a.role != "講者" {
+                names[a.letter] = "\(a.role) \(a.letter)"  // 撤名留角色+字母
             }
         }
 
@@ -243,10 +243,10 @@ final class AttributionEnricher {
             完整示例：講者 A 說「Sarah, tell us about…」、講者 B 說「Thank you David」\
             → A 在呼喚 Sarah，所以 Sarah 是 B；B 在感謝 David，所以 David 是 A。\
             結論：A=David、B=Sarah — 不要反過來
-            - 介紹詞同理：「今天邀請到的是賴律師」是在介紹「對方」— 被介紹的名字屬於另一方，\
-            絕不是說話者自己。完整示例 2：講者 A 說「邀請到的是賴芳玉律師」、\
-            講者 B 說「伯恩大家好，我是賴芳玉」→ B 自我介紹了所以 B=賴芳玉（不管別人怎麼提到她）；\
-            B 呼喚伯恩所以 A=伯恩。結論：A=伯恩、B=賴芳玉 — 把 A=賴芳玉 是嚴重錯誤
+            - 介紹詞同理：「今天邀請到的是某某老師」是在介紹「對方」— 被介紹的名字屬於另一方，\
+            絕不是說話者自己。完整示例 2：講者 A 說「邀請到的是林雅婷老師」、\
+            講者 B 說「大明哥大家好，我是林雅婷」→ B 自我介紹了所以 B=林雅婷（不管別人怎麼提到她）；\
+            B 呼喚大明哥所以那是 A 的稱呼。結論：A=大明哥、B=林雅婷 — 判成 A=林雅婷 是嚴重錯誤
             - 名字必須是逐字稿文字中實際出現過的字串，沒有就 null，絕不編造
             - 每個非 null 的 name 都要給 evidence：逐字稿中支持這個綁定的原句
             - 角色四選一：主持人、來賓、旁白、講者（旁白 = 無對話對象的敘述者；無法判斷用講者）
