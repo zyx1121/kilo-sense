@@ -63,13 +63,25 @@ final class TranscriptPolisher {
     func nudge() {
         guard apiKey != nil, !running else { return }
         guard let run = store.firstPendingRun() else { return }
-        // 滿字數觸發 = 人還在講 → 批尾的未完 final 扣給下一批；換人/idle 觸發不扣
-        if run.text.count >= 60 || run.boundary { kick(holdTail: !run.boundary); return }
+        if run.boundary { kick(holdTail: false); return }  // 換人邊界：切點已定，直接送
+        if run.text.count >= 60 {
+            if run.segments >= 2 { kick(holdTail: true); return }  // 多段：扣尾段自帶收斂時間
+            // 單段巨型 final（連續對話沒停頓的典型形態）：滿字數但 diarizer 對最新
+            // 幾秒還沒收斂 — 立即取批會切錯/漏切且 commit 後不可重切。等 2s 讓
+            // 時間軸修訂完再切（灰字照常即時顯示，只是白字晚 2 秒）。等待期間若又
+            // 進了新 final，扣尾規則照常生效。
+            schedule(after: 2, holdTail: true)
+            return
+        }
+        schedule(after: 4, holdTail: false)  // 不滿字數：idle 4s 後沖掉（人停了）
+    }
+
+    private func schedule(after seconds: Double, holdTail: Bool) {
         idleTask?.cancel()
         idleTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: .seconds(seconds))
             guard let self, !Task.isCancelled else { return }
-            kick(holdTail: false)
+            kick(holdTail: holdTail)
         }
     }
 
