@@ -97,8 +97,8 @@ struct PendingSegment {
 final class TranscriptStore {
     /// 整理完的段塊：同講者的連續整理批合成一塊。speaker 非 nil 時 overlay 在塊頭
     /// 顯示講者標頭（diarizer 標籤 / 會議模式的「我」）；前景 app fallback 不算講者、
-    /// 不上標頭 — 那是歸檔的出處欄位，不是對話者。
-    private(set) var polishedBlocks: [(speaker: String?, text: String)] = []
+    /// 不上標頭 — 那是歸檔的出處欄位，不是對話者。at = 開塊時間（標頭顯示時間戳用）。
+    private(set) var polishedBlocks: [(speaker: String?, text: String, at: Date)] = []
     /// 已整理全文（不含講者標頭）— codex context、polisher 前文參考、長度計算用。
     var polished: String { polishedBlocks.map(\.text).joined(separator: "\n\n") }
     private(set) var pending: [PendingSegment] = []
@@ -311,7 +311,7 @@ final class TranscriptStore {
             polishedBlocks[polishedBlocks.count - 1].text =
                 (sentenceEnd || langChanged) ? last.text + "\n\n" + c : glue(last.text, c)
         } else {
-            polishedBlocks.append((speaker, c))  // 換講者開新塊 — overlay 在塊頭顯示標籤
+            polishedBlocks.append((speaker, c, Date()))  // 換講者開新塊 — overlay 在塊頭顯示標籤
         }
         lastPolishedLocale = locale
         // 記憶體安全閥：總量超標先丟最舊的塊，只剩一塊就裁它的頭
