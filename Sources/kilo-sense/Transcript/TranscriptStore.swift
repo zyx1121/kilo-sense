@@ -93,7 +93,12 @@ struct PendingSegment {
 /// 逐字稿三層：polished（小模型整理過）→ pending（定稿待整理，帶 locale）→ volatile（辨識中，打字機推進）。
 @MainActor @Observable
 final class TranscriptStore {
-    private(set) var polished = ""
+    /// 整理完的段塊：同講者的連續整理批合成一塊。speaker 非 nil 時 overlay 在塊頭
+    /// 顯示講者標頭（diarizer 標籤 / 會議模式的「我」）；前景 app fallback 不算講者、
+    /// 不上標頭 — 那是歸檔的出處欄位，不是對話者。
+    private(set) var polishedBlocks: [(speaker: String?, text: String)] = []
+    /// 已整理全文（不含講者標頭）— codex context、polisher 前文參考、長度計算用。
+    var polished: String { polishedBlocks.map(\.text).joined(separator: "\n\n") }
     private(set) var pending: [PendingSegment] = []
     private(set) var volatileShown = ""
     private var volatileTarget = ""
@@ -135,7 +140,7 @@ final class TranscriptStore {
     /// 清畫面開新段落：已歸檔的不動（~/.kilo/transcripts 永遠完整），只清顯示與待整理層。
     func clearTranscript() {
         volatileTask?.cancel(); volatileTask = nil
-        polished = ""; pending = []; volatileTarget = ""; volatileShown = ""
+        polishedBlocks = []; pending = []; volatileTarget = ""; volatileShown = ""
         lastPolishedLocale = nil
         recentTurns = []
         transcriptEpoch += 1
@@ -203,25 +208,28 @@ final class TranscriptStore {
     /// 來源也斷批：會議模式我（mic）/ 對方（系統音）交錯時，批次混源會讓歸檔的
     /// 出處標頭張冠李戴。boundary = 後面接著別的語言或來源（提示 polisher 別等湊字數、快點沖掉）。
     /// 來源在這裡（讀取時）才解析講者標籤 — 見 speakerResolver 註解。
-    func firstPendingRun() -> (locale: String, text: String, segments: Int, boundary: Bool, source: String?)? {
+    func firstPendingRun() -> (locale: String, text: String, segments: Int, boundary: Bool,
+                               source: String?, isSpeaker: Bool)? {
         guard let first = pending.first else { return nil }
         let firstSource = resolvedSource(first)
         var text = first.text
         var n = 1
         for seg in pending.dropFirst() {
-            guard seg.locale == first.locale, resolvedSource(seg) == firstSource else {
-                return (first.locale, text, n, true, firstSource)
+            guard seg.locale == first.locale, resolvedSource(seg).label == firstSource.label else {
+                return (first.locale, text, n, true, firstSource.label, firstSource.isSpeaker)
             }
             text = glue(text, seg.text)
             n += 1
         }
-        return (first.locale, text, n, false, firstSource)
+        return (first.locale, text, n, false, firstSource.label, firstSource.isSpeaker)
     }
 
     /// 段落的有效來源：講者標籤（時間範圍查得到）優先，否則 fallback 收錄當下的前景 app。
-    private func resolvedSource(_ seg: PendingSegment) -> String? {
-        if let tr = seg.timeRange, let label = speakerResolver?(tr) { return label }
-        return seg.source
+    /// isSpeaker 區分「對話者」與「出處」：diarizer 標籤與會議模式 mic 的「我」是講者
+    /// （overlay 顯示標頭），前景 app 名只進歸檔。
+    private func resolvedSource(_ seg: PendingSegment) -> (label: String?, isSpeaker: Bool) {
+        if let tr = seg.timeRange, let label = speakerResolver?(tr) { return (label, true) }
+        return (seg.source, seg.source == "我")
     }
 
     private var lastPolishedLocale: String?
@@ -232,16 +240,27 @@ final class TranscriptStore {
     /// 同語言看句末標點（有 → 空行；無 → 斷句續接）。
     @discardableResult
     func commitPolished(_ cleaned: String, locale: String, consumedSegments: Int,
-                        source: String? = nil, epoch: Int? = nil) -> String? {
+                        source: String? = nil, isSpeaker: Bool = false, epoch: Int? = nil) -> String? {
         pending.removeFirst(min(consumedSegments, pending.count))
         let c = breakLines(trimOverlap(cleaned.trimmingCharacters(in: .whitespacesAndNewlines)))
         guard !c.isEmpty else { return nil }
         if let epoch, epoch != transcriptEpoch { return c }  // 清除後才回來的批：歸檔照走、畫面不復活
-        let sentenceEnd = polished.last.map { "。！？.!?…".contains($0) } ?? false
+        let speaker = isSpeaker ? source : nil
+        let sentenceEnd = polishedBlocks.last?.text.last.map { "。！？.!?…".contains($0) } ?? false
         let langChanged = lastPolishedLocale != nil && lastPolishedLocale != locale
-        polished = polished.isEmpty ? c : ((sentenceEnd || langChanged) ? polished + "\n\n" + c : glue(polished, c))
+        if let last = polishedBlocks.last, last.speaker == speaker {
+            // 同講者（或同樣無講者）：沿用既有接合規則續進同一塊
+            polishedBlocks[polishedBlocks.count - 1].text =
+                (sentenceEnd || langChanged) ? last.text + "\n\n" + c : glue(last.text, c)
+        } else {
+            polishedBlocks.append((speaker, c))  // 換講者開新塊 — overlay 在塊頭顯示標籤
+        }
         lastPolishedLocale = locale
-        if polished.count > 12000 { polished = String(polished.suffix(9000)) }
+        // 記憶體安全閥：總量超標先丟最舊的塊，只剩一塊就裁它的頭
+        while polished.count > 12000, polishedBlocks.count > 1 { polishedBlocks.removeFirst() }
+        if polished.count > 12000 {
+            polishedBlocks[0].text = String(polishedBlocks[0].text.suffix(9000))
+        }
         recentTurns.append((source, c))  // 輪替史 — enricher 推角色/人名的原料
         if recentTurns.count > 30 { recentTurns.removeFirst(recentTurns.count - 30) }
         turnsVersion += 1
