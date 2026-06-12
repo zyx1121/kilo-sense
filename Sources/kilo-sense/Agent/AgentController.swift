@@ -52,6 +52,10 @@ final class AgentController {
         self.polisher = polisher
         self.speakers = speakers
         self.isMeeting = isMeeting
+        // 同人判定：講者標籤正規化成字母 — 顯示名升級（講者 B → 伯恩）不撕塊
+        store.speakerCanonicalizer = { [weak self] label in
+            self?.speakers.canonicalLetter(for: label)
+        }
         // 講者標籤延後到 polisher 取批時解析（diarizer 收斂比 final 慢，commit 當下查常落空）
         store.speakerResolver = { [weak self] range in
             guard let self else { return nil }

@@ -126,6 +126,10 @@ final class TranscriptStore {
     /// 系統音訊最近一次 ASR 結果（volatile 也算）— 分人的 speech gate 用：有語音才餵 diarizer。
     var lastSpeechAt = Date.distantPast
 
+    /// 講者標籤 → 字母正規化（AgentController 注入）—「講者 B」與後來升級的顯示名
+    ///（「伯恩」）是同一個人，塊接合靠這個判同，名字升級才不會把同一個人撕成兩塊。
+    var speakerCanonicalizer: ((String?) -> String?)?
+
     /// 講者標籤解析器（AgentController 注入）。在 firstPendingRun 讀取時才呼叫 —
     /// diarizer 收斂比 ASR final 慢 ~0.3-10s，commit 當下查常落空；
     /// polisher 取批至少在 4s idle / 湊字之後，那時 segment 已就位。
@@ -329,12 +333,30 @@ final class TranscriptStore {
         let speaker = isSpeaker ? source : nil
         let sentenceEnd = polishedBlocks.last?.text.last.map { "。！？.!?…".contains($0) } ?? false
         let langChanged = lastPolishedLocale != nil && lastPolishedLocale != locale
-        if let last = polishedBlocks.last, last.speaker == speaker {
-            // 同講者（或同樣無講者）：沿用既有接合規則續進同一塊
+        // 同講者判定：標籤字串相同，或正規化成同一個字母（「講者 B」→ 顯示名升級成
+        //「伯恩」仍是同一人 — 續塊並把塊頭更新成最新名，不撕成兩塊）
+        let samePerson: Bool = {
+            guard let last = polishedBlocks.last else { return false }
+            if last.speaker == speaker { return true }
+            guard let canon = speakerCanonicalizer,
+                  let a = canon(last.speaker), let b = canon(speaker) else { return false }
+            return a == b
+        }()
+        if samePerson, let last = polishedBlocks.last {
             polishedBlocks[polishedBlocks.count - 1].text =
                 (sentenceEnd || langChanged) ? last.text + "\n\n" + c : glue(last.text, c)
+            polishedBlocks[polishedBlocks.count - 1].speaker = speaker ?? last.speaker
         } else {
             polishedBlocks.append((speaker, c, Date()))  // 換講者開新塊 — overlay 在塊頭顯示標籤
+        }
+        // 回溯改名：同一個人的舊塊頭跟著升級成最新標籤（講者 B → 賴芳玉）—
+        // 不然名字推出來之後，畫面上同一人頂著新舊兩種標看起來像三個人。
+        // 只動 overlay 顯示；歸檔維持 forward-only。
+        if let speaker, let canon = speakerCanonicalizer, let me = canon(speaker) {
+            for i in polishedBlocks.indices
+            where polishedBlocks[i].speaker != speaker && canon(polishedBlocks[i].speaker) == me {
+                polishedBlocks[i].speaker = speaker
+            }
         }
         lastPolishedLocale = locale
         // 記憶體安全閥：總量超標先丟最舊的塊，只剩一塊就裁它的頭
