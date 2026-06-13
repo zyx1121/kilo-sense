@@ -24,7 +24,6 @@
 - **連續逐字稿** — 可拖動的 overlay 視窗累積全文；小模型背景把生稿補標點、修辨識錯字、分段 — 灰字尾巴一直流入，幾秒後被整理過的白字取代。每個區段標頭顯示時間戳與來源 app（`Safari: <影片標題>` 等）；靜默 gap 或來源切換時開新區段
 - **問 Kilo** — 輸入框直通 codex agent（帶最近逐字稿 + session 記憶），tool use 步驟即時浮出、回應打字機串流；說「記錄下來」它就寫筆記進 `~/.kilo/`，回覆裡的路徑點了直接開
 - **按住說話** — 按住**右 ⇧** 對 Kilo 口述，文字即時打進輸入框（本機轉錄），放開可修改、Enter 送出；只有按住時 mic 才開著
-- **分人** _(預設關閉 — `--diarize` 開啟)_ — 真實 podcast / 影片的即時分人品質還不夠（串流 diarizer 仍會在換手點翻講者身分），所以預設關閉，逐字稿走純連續流配時間戳 + 來源標頭。用 `--diarize` 開啟後：本機 diarizer（FluidAudio 的 NVIDIA Streaming Sortformer；超過 4 講者用 `--diarizer ls-eend`）分辨講者，多講者內容自動分塊（「**講者 A / B**」、會議「**對方 A / B**」），命名走手動（**`/name A 王小明`** 或逐字稿右鍵 → 命名講者 A），註冊經驗證的聲紋到 `~/.kilo/voices/` 跨 session 自動認人
 - **會議模式** — 系統音訊裡沒有你自己的聲音，開會時逐字稿會少掉你這側；從選單列打開後 mic 持續錄，你的發言以「**我**」標進逐字稿、系統音訊維持對方那側
 - **Shake 圈選** — 晃游標進選取模式：螢幕變暗、游標下的 UI 元素亮起，左鍵點擊收集（文字收文字、其他截圖），右鍵結束；素材變輸入框上方的 chips，下一輪丟給 codex 看圖分析
 
@@ -152,7 +151,6 @@ make publish   # make release + 傳上 GitHub Release（簽名私鑰不出本機
 - **codex CLI** 在 PATH（agent 引擎；`zsh -lc` 載入，fnm shim 也通）
 - **OpenAI key** 在 Keychain（`service=kilo account=openai`）— agent 與逐字稿整理的 fallback 用；沒有 key 字幕與逐字稿照常，agent 停用
 - 權限：**螢幕錄製**（系統音訊 + 圈選截圖）、**輔助使用**（shake 的元素探測與點擊攔截），首次啟動會提示；**麥克風**（按住說話 / 會議模式），首次使用時提示
-- 首次偵測到語音時會從 Hugging Face 下載分人 model（之後走本機快取）
 
 逐字稿整理走 `gpt-5.4-nano` 直打 API（沒 OpenAI key → 原文直出，不整理）。
 
@@ -172,7 +170,6 @@ kilo-sense 是感官 agent，會錄系統音訊、截你圈選的畫面。資料
 | 逐字稿 | 送 **OpenAI** `gpt-5.4-nano` 整理潤稿 |
 | 你的指令 + 最近逐字稿 + 圈選截圖 | 送 **codex / OpenAI** 產生回應 |
 | 筆記 / 逐字稿存檔 | **本機** `~/.kilo`，不上傳 |
-| 聲紋（自動認人） | **本機** `~/.kilo/voices/` — 已命名講者的短音訊樣本，本機註冊、從不上傳；刪掉資料夾即全部遺忘 |
 
 **key 與 codex 都是你自己的** — kilo-sense 用你 Keychain 裡的 OpenAI key、你 PATH 上的 codex CLI，不內建、不代管、不經過作者的任何伺服器。送什麼給 OpenAI 由你的使用決定，kilo-sense 只是把它接起來；逐字稿與筆記只存在你本機的 `~/.kilo`。
 
