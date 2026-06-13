@@ -96,33 +96,6 @@ Apple's recognizer emits each utterance twice: first as **volatile** drafts that
 
 Why batch instead of cleaning every final? Micro-batching (size-or-idle, the same shape as Kafka's `batch.size` + `linger.ms`) buys three things: more context per chunk (typo fixes need surrounding words), fewer batch seams (every seam needs stitching and dedup guards), and fewer API round-trips. It costs almost nothing perceptually — raw finals are already readable the moment they land; cleanup just upgrades them from grey to white a few seconds later. The LLM only does what is genuinely uncertain (punctuation, mis-recognitions); everything that can be deterministic (paragraph breaks, stitching, dedup) is plain code.
 
-## Speaker pipeline
-
-```mermaid
-flowchart TD
-    audio["🔊 System audio — the same 16 kHz stream the ASR eats"]
-    gate["Speech gate<br/>ASR activity opens · 30 s silence closes · a 5 s ring back-fills the lead-in"]
-    diar["🧭 LS-EEND diarizer — on-device, 43 MB<br/>pre-warmed at launch when voiceprints exist"]
-    tl["Speaker timeline<br/>finalized + tentative segments, aligned to the ASR clock"]
-    label["Labels resolve when the polisher reads a batch<br/>講者 / 對方 A·B — single-narrator content keeps the app · title source"]
-    llm["☁️ Attribution — gpt-5.4-mini, structured output<br/>roles + names · vocative logic · evidence-gated<br/>every 60 s; slows to 10 min once everyone is named"]
-    enroll["Voiceprint enroll<br/>name stable two rounds in a row → enrollSpeaker<br/>audio clipped from a 120 s rolling ring"]
-    voices[("~/.kilo/voices/*.f32<br/>raw 16 kHz audio — survives model upgrades")]
-
-    audio --> gate --> diar --> tl --> label
-    label -->|recent turns| llm -->|"stable ×2"| enroll --> voices
-    voices -. "re-enrolled at launch → known voices recognized acoustically, no LLM" .-> diar
-
-    classDef device fill:#e6f4ea,stroke:#34a853,color:#0b3d20;
-    classDef cloud fill:#e8f0fe,stroke:#4285f4,color:#0b2a5b;
-    classDef store fill:#fef7e0,stroke:#f9ab00,color:#5b4300;
-    class audio,gate,diar,tl,label,enroll device;
-    class llm cloud;
-    class voices store;
-```
-
-Three timing tricks keep this accurate and cheap. Labels resolve at polish-read time, not at commit — by then the diarizer's **tentative segments** already cover even long utterances that kick the polisher immediately. The LLM pass encodes **vocative logic** (a name you say is almost always the *other* person's; only self-introductions bind to the speaker) and accepts a name only with a verifiable transcript quote — and because a wrong voiceprint would not self-heal the way display names do, enrollment additionally requires the **same binding two rounds in a row**. Once everyone on screen is named, attribution throttles from once a minute to once every ten — known voices are recognized acoustically and the LLM has nothing left to do. Delete `~/.kilo/voices/` to forget everyone.
-
 ## Running it (no Xcode)
 
 ```bash
