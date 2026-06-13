@@ -83,7 +83,6 @@ final class Transcriber {
         return CMTimeRange(start: first.start, end: last.end)
     }
 
-
     /// run 平均信心（以字元數加權；volatile 可能整串沒有 → nil）。
     private static func meanConfidence(_ text: AttributedString) -> Double? {
         var sum = 0.0
@@ -103,12 +102,6 @@ final class Transcriber {
         inputBuilder.yield(AnalyzerInput(buffer: converted))
     }
 
-    func finish() async throws {
-        inputBuilder.finish()
-        try await analyzer?.finalizeAndFinishThroughEndOfInput()
-        resultsTask?.cancel()
-        resultsTask = nil
-    }
 }
 
 extension Transcriber {
