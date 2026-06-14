@@ -30,6 +30,28 @@ let polishModel: String = {
     return "gpt-5.4-nano"
 }()
 
+/// 確保 ~/.kilo/AGENTS.md 存在 — codex 以 ~/.kilo 為 workdir，會自動載它當工作區方位指引
+/// （佈局 + 「過去先 grep transcripts」）。只在缺檔時寫：使用者既有的 AGENTS.md 不覆寫。
+func seedAgentsFile() {
+    let path = kiloWorkdir + "/AGENTS.md"
+    guard !FileManager.default.fileExists(atPath: path) else { return }
+    try? FileManager.default.createDirectory(atPath: kiloWorkdir, withIntermediateDirectories: true)
+    let content = """
+        # Kilo workspace
+
+        This directory (`~/.kilo`) is your workspace and Kilo's memory.
+
+        - `transcripts/YYYY-MM-DD.md` — transcript history; each block is headed \
+        `## [HH:mm] source` (the app + window title, or `我` for the user's own mic)
+        - `notes/` — notes you have written
+        - `captures/` — screenshots the user selected
+
+        When asked about the past ("earlier", "last week", "that video"), \
+        `grep` `transcripts/` before answering.
+        """
+    try? content.write(toFile: path, atomically: true, encoding: .utf8)
+}
+
 if CommandLine.arguments.contains("--locales") {
     await dumpLocales()
     exit(0)
@@ -54,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_: Notification) {
         Task.detached { _ = CodexAgent.shellPath }  // 背景預熱 codex PATH 解析（GUI app 貧瘠環境用）
+        seedAgentsFile()  // 缺檔才寫；codex 自動載 ~/.kilo/AGENTS.md 當工作區方位指引
         statusBar = StatusBarController(metrics: metrics)  // 選單列入口（控制 app 的唯一處）
         showOverlay()
         showSummaryWindow()
