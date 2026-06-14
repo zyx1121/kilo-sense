@@ -87,7 +87,7 @@ final class TranscriptPolisher {
         let tail = String(store.polished.suffix(120))
         let epoch = store.transcriptEpoch  // 清除畫面時這批只進歸檔、不上畫面
         Task {
-            var result: (text: String?, blockID: UUID?) = (nil, nil)
+            var result: (text: String?, blockID: UUID?, paraIDs: [UUID]) = (nil, nil, [])
             do {
                 let cleaned = try await polish(chunk: run.text, locale: run.locale, contextTail: tail)
                 result = store.commitPolished(cleaned.isEmpty ? run.text : cleaned, locale: run.locale, consumedSegments: run.segments, source: run.source, epoch: epoch, timeRange: run.timeRange)
@@ -102,9 +102,10 @@ final class TranscriptPolisher {
             if let text = result.text { archiver.append(text, source: run.source) }  // 持久化（整理後的定稿）
             // 外語段落（非中文）背景翻成中文，回填該塊 — 中文內容不翻（省 token，母語免譯）
             if let text = result.text, let id = result.blockID, !run.locale.hasPrefix("zh") {
+                let paraIDs = result.paraIDs
                 Task { [weak self] in
                     guard let self, let zh = try? await translate(text) else { return }
-                    store.appendTranslation(blockID: id, zh)
+                    store.applyTranslation(blockID: id, paraIDs: paraIDs, zh)
                 }
             }
             running = false
@@ -123,7 +124,7 @@ final class TranscriptPolisher {
         req.httpBody = try JSONSerialization.data(withJSONObject: [
             "model": model,
             "messages": [
-                ["role": "system", "content": "把使用者訊息翻成繁體中文，只輸出譯文本身，不要任何說明、引號或標記。"],
+                ["role": "system", "content": "把使用者訊息翻成繁體中文，保留原文的段落結構（段落之間用空行分隔、逐段對應），只輸出譯文本身，不要任何說明、引號或標記。"],
                 ["role": "user", "content": text],
             ],
             "max_completion_tokens": 2000,
