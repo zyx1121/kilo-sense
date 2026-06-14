@@ -91,15 +91,23 @@ struct PendingSegment {
 
 /// overlay 上一個整理完的段塊 + 顯示用 metadata。塊頭 = 時間戳 + [音訊來源圖示]
 /// + [語言] + 來源 + 字數·時長。
+/// 逐字稿一個段落 + 它的譯文（外語塊才有 zh）。譯文綁在段落上 → 渲染一段一譯。
+struct TParagraph: Identifiable {
+    let id = UUID()
+    var text: String
+    var zh: String?
+}
+
 struct PolishedBlock: Identifiable {
-    let id = UUID()           // 翻譯背景回填用
+    let id = UUID()
     var source: String?       // app 來源（前景 app · 視窗標題）或會議 mic 的「我」
     let locale: String        // bcp47 — 標 [中]/[EN]
-    var text: String          // 整理後文字（同塊續批會 append）
+    var paras: [TParagraph]   // 段落（各自帶譯文）；同塊續批 append
     let at: Date              // 開塊時間（標頭時間戳）
-    var range: CMTimeRange?   // 音訊時間範圍（聯集；算時長 + 回溯補標）
-    var translation: String?  // 外語塊的中文譯文（背景翻譯填，逐批累積）
+    var range: CMTimeRange?   // 音訊時間範圍（聯集；算時長）
 
+    /// 整段純文字（codex context / 歸檔 / 字數）。
+    var text: String { paras.map(\.text).joined(separator: "\n\n") }
     /// mic（會議我這側）vs 系統音訊 — 來源標「我」即 mic。
     var isMic: Bool { source == "我" }
     var charCount: Int { text.count }
@@ -254,54 +262,70 @@ final class TranscriptStore {
     @discardableResult
     func commitPolished(_ cleaned: String, locale: String, consumedSegments: Int,
                         source: String? = nil, epoch: Int? = nil,
-                        timeRange: CMTimeRange? = nil) -> (text: String?, blockID: UUID?) {
+                        timeRange: CMTimeRange? = nil) -> (text: String?, blockID: UUID?, paraIDs: [UUID]) {
         // 清除後才落地的批：它消耗的段已被 clearTranscript 清空，再 removeFirst 會吃掉
         // 清除後新進的段（沒整理沒歸檔直接蒸發）— 過期批不消耗
         if epoch == nil || epoch == transcriptEpoch {
             pending.removeFirst(min(consumedSegments, pending.count))
         }
         let c = breakLines(trimOverlap(cleaned.trimmingCharacters(in: .whitespacesAndNewlines)))
-        guard !c.isEmpty else { return (nil, nil) }
-        if let epoch, epoch != transcriptEpoch { return (c, nil) }  // 清除後才回來的批：歸檔照走、畫面不復活
-        let sentenceEnd = polishedBlocks.last?.text.last.map { "。！？.!?…".contains($0) } ?? false
-        let langChanged = lastPolishedLocale != nil && lastPolishedLocale != locale
-        // 同塊判定。分人關閉：純逐字稿，靜默 gap > 2.5s 才開新塊（時間戳沿停頓散佈，
-        // 無講者標頭）。分人開啟：標籤字串相同、或正規化成同一字母（「講者 B」→ 升級成
-        //「伯恩」仍是同一人 — 續塊並更新塊頭，不撕兩塊）。
+        guard !c.isEmpty else { return (nil, nil, []) }
+        if let epoch, epoch != transcriptEpoch { return (c, nil, []) }  // 清除後才回來的批：歸檔照走、畫面不復活
+        // 一批可能含多段（breakLines 用空行分段）— 每段獨立成 TParagraph，譯文一段一掛。
+        let newParas = c.components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { TParagraph(text: $0) }
+        guard !newParas.isEmpty else { return (c, nil, []) }
+        // 同塊判定：純逐字稿，同來源 + 同語言 + 靜默 gap ≤ 2.5s 續塊，否則開新塊。
         let sameBlock: Bool = {
             guard let last = polishedBlocks.last else { return false }
             if last.source != source { return false }  // app 來源切換 → 開新塊
-            if last.locale != locale { return false }  // 語言切換 → 開新塊（標記才對得上內容）
+            if last.locale != locale { return false }  // 語言切換 → 開新塊
             guard let lr = last.range, let cur = timeRange else { return true }
             return cur.start.seconds - lr.end.seconds <= 2.5
         }()
-        if sameBlock, let last = polishedBlocks.last {
-            polishedBlocks[polishedBlocks.count - 1].text =
-                (sentenceEnd || langChanged) ? last.text + "\n\n" + c : glue(last.text, c)
-            if let timeRange {  // 範圍聯集 — 回溯補標查的是整塊的時間跨度
-                polishedBlocks[polishedBlocks.count - 1].range = last.range.map {
+        if sameBlock {
+            polishedBlocks[polishedBlocks.count - 1].paras.append(contentsOf: newParas)
+            if let timeRange {  // 範圍聯集 — 算整塊時長
+                polishedBlocks[polishedBlocks.count - 1].range = polishedBlocks[polishedBlocks.count - 1].range.map {
                     CMTimeRange(start: min($0.start, timeRange.start), end: max($0.end, timeRange.end))
                 } ?? timeRange
             }
         } else {
-            polishedBlocks.append(PolishedBlock(  // 換講者/來源/靜默開新塊
-                source: source, locale: locale, text: c, at: Date(), range: timeRange))
+            polishedBlocks.append(PolishedBlock(  // 換來源/語言/靜默開新塊
+                source: source, locale: locale, paras: newParas, at: Date(), range: timeRange))
         }
         lastPolishedLocale = locale
-        // 記憶體安全閥：總量超標先丟最舊的塊，只剩一塊就裁它的頭
+        // 記憶體安全閥：總量超標先丟最舊的塊 → 最舊的段 → 裁首段頭
         while polished.count > 12000, polishedBlocks.count > 1 { polishedBlocks.removeFirst() }
-        if polished.count > 12000 {
-            polishedBlocks[0].text = String(polishedBlocks[0].text.suffix(9000))
+        while polished.count > 12000, (polishedBlocks.first?.paras.count ?? 0) > 1 {
+            polishedBlocks[0].paras.removeFirst()
         }
-        return (c, polishedBlocks.last?.id)  // 上稿文字（給歸檔）+ 這批進的塊 id（給翻譯回填）
+        if polished.count > 12000, let head = polishedBlocks.first?.paras.first?.text {
+            polishedBlocks[0].paras[0].text = String(head.suffix(9000))
+        }
+        return (c, polishedBlocks.last?.id, newParas.map(\.id))  // 上稿文字 + 塊 id + 本批段落 id（翻譯回填）
     }
 
     /// 背景翻譯回填：找到該塊把中文譯文逐批累積（塊已被記憶體閥裁掉就放棄）。
-    func appendTranslation(blockID: UUID, _ zh: String) {
-        guard let i = polishedBlocks.firstIndex(where: { $0.id == blockID }) else { return }
-        let t = zh.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return }
-        polishedBlocks[i].translation = polishedBlocks[i].translation.map { $0 + "\n\n" + t } ?? t
+    /// 背景翻譯回填：把該批譯文按空行切段、逐段對齊回填（段數對得上就 1:1，
+    /// 對不上就整段塞第一段，至少不掉字）。塊已被記憶體閥裁掉就放棄。
+    func applyTranslation(blockID: UUID, paraIDs: [UUID], _ zh: String) {
+        guard let bi = polishedBlocks.firstIndex(where: { $0.id == blockID }) else { return }
+        let zhs = zh.components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !zhs.isEmpty else { return }
+        let aligned = paraIDs.count == zhs.count
+        for (k, pid) in paraIDs.enumerated() {
+            guard let pj = polishedBlocks[bi].paras.firstIndex(where: { $0.id == pid }) else { continue }
+            if aligned {
+                polishedBlocks[bi].paras[pj].zh = zhs[k]
+            } else if k == 0 {
+                polishedBlocks[bi].paras[pj].zh = zh.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
     }
 
     /// 句末標點後斷行：中文「。！？」直接斷；英文「. ! ?」後接空格才斷（"U.S. Army" 會誤斷，接受）。

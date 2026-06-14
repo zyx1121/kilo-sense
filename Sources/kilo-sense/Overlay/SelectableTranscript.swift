@@ -60,14 +60,16 @@ struct SelectableTranscript: NSViewRepresentable {
         for (i, block) in store.polishedBlocks.suffix(18).enumerated() {
             if i > 0 { out.append(white("\n\n", 0.92)) }
             out.append(headerLine(block, scale: scale, para: para))
-            out.append(white("\n", 0.92))
-            out.append(white(block.text, 0.92))
-            if let zh = block.translation {
-                let t = "\n　" + zh.replacingOccurrences(of: "\n\n", with: "\n　")
-                out.append(NSAttributedString(string: t, attributes: [
-                    .font: NSFont.systemFont(ofSize: 11.5 * scale),
-                    .foregroundColor: NSColor.systemCyan.withAlphaComponent(0.55),
-                    .paragraphStyle: para]))
+            for (j, p) in block.paras.enumerated() {
+                out.append(white(j == 0 ? "\n" : "\n\n", 0.92))
+                out.append(white(p.text, 0.92))
+                if let zh = p.zh {  // 譯文緊貼在該段下方，縮排淡 cyan
+                    let t = "\n　" + zh.replacingOccurrences(of: "\n\n", with: "\n　")
+                    out.append(NSAttributedString(string: t, attributes: [
+                        .font: NSFont.systemFont(ofSize: 11.5 * scale),
+                        .foregroundColor: NSColor.systemCyan.withAlphaComponent(0.55),
+                        .paragraphStyle: para]))
+                }
             }
         }
         let tail = NSMutableAttributedString()
