@@ -139,35 +139,10 @@ struct TranscriptView: View {
                     .font(.system(size: sz(12))).foregroundStyle(.white.opacity(0.45))
                     .padding(.horizontal, 16).padding(.bottom, 8)
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        // 拆兩塊讓 SwiftUI 細粒度追蹤：volatile 打字機高頻變動只重算 Tail
-                        //（短），已定稿區 Polished 不碰 — 治本 ASR 被 overlay 反壓的積壓。
-                        VStack(alignment: .leading, spacing: 0) {
-                            PolishedTranscript(store: store)
-                            TailTranscript(store: store)
-                        }
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .contextMenu {
-                            Button("複製逐字稿") {
-                                copyText([store.polished, store.pendingRaw, store.volatileShown]
-                                    .filter { !$0.isEmpty }.joined(separator: "\n"))
-                            }
-                            Divider()
-                            Button("清除逐字稿", role: .destructive) {
-                                store.clearTranscript()
-                            }
-                        }
-                        Color.clear.frame(height: 1).id("bottom")
-                    }
+                SelectableTranscript(store: store, tick: store.transcriptLength)
                     .frame(height: sz(230))
-                    .onChange(of: store.transcriptLength) { _, _ in
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                }
-                .padding(.bottom, 6)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 6)
             }
 
             // Kilo feed：跨 turn 歷史保留，自動跟到最新、可往回捲
@@ -406,80 +381,5 @@ struct TranscriptView: View {
         guard n < chars.count else { return a }
         let end = chars.index(chars.startIndex, offsetBy: n)
         return AttributedString(a[a.startIndex..<end])
-    }
-}
-
-/// 已定稿逐字稿區 — body 只讀 polishedBlocks（+ uiScale），所以 volatile 打字機高頻
-/// 變動「不會」重算這裡（SwiftUI @Observable 細粒度只重算讀了變動屬性的 view）。
-/// 只渲染最近 18 塊封頂重建成本；完整逐字稿在歸檔、codex context 讀 store.polished。
-private struct PolishedTranscript: View {
-    @Bindable var store: TranscriptStore
-    private func sz(_ v: CGFloat) -> CGFloat { v * store.uiScale }
-    private static let timeFormat: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
-    }()
-
-    var body: some View {
-        Text(attributed)
-            .font(.system(size: sz(12)))
-            .lineSpacing(3.5)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var attributed: AttributedString {
-        func styled(_ s: String, _ opacity: Double) -> AttributedString {
-            var a = AttributedString(s); a.foregroundColor = .white.opacity(opacity); return a
-        }
-        var out = AttributedString()
-        for (i, block) in store.polishedBlocks.suffix(18).enumerated() {
-            if i > 0 { out += styled("\n\n", 0.92) }
-            out += header(block) + AttributedString("\n") + styled(block.text, 0.92)
-            if let zh = block.translation {  // 外語塊的中文譯文 — 縮排淡 cyan，原文下方
-                var t = AttributedString("\n　" + zh.replacingOccurrences(of: "\n\n", with: "\n　"))
-                t.foregroundColor = .cyan.opacity(0.55)
-                t.font = .system(size: sz(11.5))
-                out += t
-            }
-        }
-        return out
-    }
-
-    /// 塊頭：時間戳 · 音訊圖示 · 語言 · 來源 · 字數時長。
-    private func header(_ block: PolishedBlock) -> AttributedString {
-        func part(_ s: String, _ color: Color, _ weight: Font.Weight = .semibold) -> AttributedString {
-            var a = AttributedString(s); a.foregroundColor = color
-            a.font = .system(size: sz(10.5), weight: weight); return a
-        }
-        let dim = Color.white.opacity(0.4)
-        var h = part(Self.timeFormat.string(from: block.at), dim)
-        h += part("  \(block.isMic ? "🎤" : "🔊") \(block.locale.hasPrefix("zh") ? "中" : "EN")", dim, .medium)
-        if let source = block.source {
-            h += part("  " + source.prefix(28), .white.opacity(0.5), .medium)
-        }
-        var tail = "  · \(block.charCount) 字"
-        if let dur = block.durationSeconds, dur >= 1 { tail += " · \(Int(dur))s" }
-        h += part(tail, .white.opacity(0.3), .regular)
-        return h
-    }
-}
-
-/// 尾巴：定稿待整理（半白）+ 辨識中（灰，打字機）。volatile 每 80ms 變動只重算這個
-/// 短 Text，不碰上面的已定稿區 — ASR 不再被 overlay 全量重繪反壓而積壓的關鍵。
-private struct TailTranscript: View {
-    @Bindable var store: TranscriptStore
-    private func sz(_ v: CGFloat) -> CGFloat { v * store.uiScale }
-
-    var body: some View {
-        Text(attributed)
-            .font(.system(size: sz(12)))
-            .lineSpacing(3.5)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var attributed: AttributedString {
-        func styled(_ s: String, _ opacity: Double) -> AttributedString {
-            var a = AttributedString(s); a.foregroundColor = .white.opacity(opacity); return a
-        }
-        return styled(store.pendingRaw, 0.55) + styled(store.volatileShown, 0.38)
     }
 }
